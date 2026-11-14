@@ -296,13 +296,7 @@ impl Injector {
                 if let Some(repo) = &claim
                     && !github.repos.contains_key(&repo.to_ascii_lowercase())
                 {
-                    audit::deny_request(
-                        "github",
-                        &host,
-                        "CONNECT",
-                        repo,
-                        "repository not in [github]",
-                    );
+                    audit::deny_repo(&host, repo, "repository not in [github]");
                     return reply(
                         StatusCode::FORBIDDEN,
                         format!("the bas policy has no [[github.repo]] entry for {repo}\n"),

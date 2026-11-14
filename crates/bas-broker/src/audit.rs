@@ -1,8 +1,8 @@
 //! Audit entries for every credential the broker hands out, adds, or refuses.
 //!
 //! Each audit entry carries `BAS_AUDIT=1` and `EVENT`, plus `NAME`, `PEER_UID`, `PEER_PID`,
-//! `HOST`, `APPROVAL_ID`, `CLAIMED_ARGV`, and `CLAIMED_CWD` where they apply. No entry ever
-//! holds a value.
+//! `HOST`, `REPO`, `APPROVAL_ID`, `CLAIMED_ARGV`, and `CLAIMED_CWD` where they apply. No
+//! entry ever holds a value.
 //!
 //! On Linux the entries go to the system journal. journald adds `_SYSTEMD_UNIT` itself, so a
 //! client cannot forge an entry for the broker's unit.
@@ -296,6 +296,18 @@ pub fn inject(name: &str, host: &str, method: &str, path: &str) {
         method,
         path,
         "added {name} to {method} https://{host}{path}"
+    );
+}
+
+/// Records a GitHub tunnel refused for the repository named in its proxy user.
+pub fn deny_repo(host: &str, repo: &str, reason: &str) {
+    tracing::info!(
+        bas_audit = 1,
+        event = "deny",
+        name = "github",
+        host,
+        repo,
+        "refused CONNECT https://{host} for {repo}: {reason}"
     );
 }
 
