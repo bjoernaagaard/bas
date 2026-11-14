@@ -93,6 +93,7 @@ The `[github]` table lets the proxy mint GitHub App installation tokens. [Set up
 [github]
 app_id = 123456
 private_key = "bas://home/<secret-id>"
+user_token = "bas://home/<secret-id>"
 
 [[github.repo]]
 name = "OWNER/REPO"
@@ -104,11 +105,14 @@ permissions = { contents = "write", pull_requests = "write", issues = "write", a
 |---|---|
 | `app_id` | The App's ID |
 | `private_key` | Where the App's RSA private key, in PEM, lives |
+| `user_token` | Optional. Where a GitHub user token lives, such as a fine-grained personal access token. The proxy adds it only to requests that name no repository. |
 | `[[github.repo]]` `name` | `OWNER/REPO`. Each repository may appear once. |
 | `[[github.repo]]` `installation_id` | The installation of the App that covers the repository |
 | `[[github.repo]]` `permissions` | Permissions each token asks for, within the App's permissions |
 
 With a `[github]` table, the proxy handles `api.github.com`, `uploads.github.com`, and `github.com`. Each token covers one repository and lasts one hour, and the broker reuses it until five minutes before it expires.
+
+Some requests name no repository, such as `gh auth status`, `gh api user`, or a GraphQL `viewer { login }` query. An App token can't answer them, so without `user_token` the proxy refuses them. With `user_token`, the proxy reads the token from Secrets Manager for each such request and adds it, and the program never sees it. A request that names a repository always gets an App token, and a repository missing from `[[github.repo]]` stays refused.
 
 ## [tailscale]
 
