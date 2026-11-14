@@ -50,6 +50,31 @@ pub struct PendingRequest {
     pub url: String,
 }
 
+/// Reply to `GET /v1/passkeys`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PasskeyList {
+    /// The enrolled passkeys, oldest first.
+    pub passkeys: Vec<PasskeySummary>,
+}
+
+/// One enrolled passkey, without its key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PasskeySummary {
+    /// The name given when it was enrolled.
+    pub label: String,
+    /// When it was enrolled, in RFC 3339.
+    pub added: String,
+}
+
+/// Body of `POST /v1/passkeys`.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct AddPasskey {
+    /// Whether the first passkey enrolled through the link removes every passkey enrolled
+    /// before it.
+    #[serde(default)]
+    pub replace: bool,
+}
+
 /// Reply to `GET /v1/audit`, served on macOS, where callers cannot read the audit file.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AuditEntries {

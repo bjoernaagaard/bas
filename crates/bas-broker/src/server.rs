@@ -30,8 +30,8 @@ use crate::files::{bind_socket, file_error};
 use crate::passkeys::Passkeys;
 use crate::policy::{self, Policy};
 use crate::protocol::{
-    Accepted, ActivePolicy, AddSecret, ApprovalLink, HelperRequest, HelperValue, PendingRequest,
-    PolicyProposal, ProxyInfo, Refusal, RunReply, RunRequest, Status,
+    Accepted, ActivePolicy, AddPasskey, AddSecret, ApprovalLink, HelperRequest, HelperValue,
+    PasskeyList, PendingRequest, PolicyProposal, ProxyInfo, Refusal, RunReply, RunRequest, Status,
 };
 use crate::state::{Broker, POLICY_FILE};
 use crate::{Error, pages, proxy, ssh_agent};
@@ -120,7 +120,7 @@ async fn run(options: &Options) -> Result<(), Error> {
         .route("/v1/secrets/{name}/rotate", post(rotate))
         .route("/v1/policy", get(active_policy).post(propose_policy))
         .route("/v1/approvals/{id}", get(approval_state))
-        .route("/v1/passkeys", post(add_passkey));
+        .route("/v1/passkeys", get(list_passkeys).post(add_passkey));
     #[cfg(not(target_os = "linux"))]
     let app = app.route("/v1/audit", get(audit_entries));
     let app = app
@@ -503,9 +503,30 @@ async fn propose_policy(
     )
 }
 
+/// `bas passkey list`: the enrolled passkeys' labels and when each was added, never a key.
+async fn list_passkeys(
+    State(broker): State<Arc<Broker>>,
+    Allowed(_): Allowed,
+) -> Json<PasskeyList> {
+    Json(PasskeyList {
+        passkeys: broker.passkeys.list(),
+    })
+}
+
 /// `bas passkey add`: opens an approval whose page shows an enrollment link.
-async fn add_passkey(State(broker): State<Arc<Broker>>, Allowed(peer): Allowed) -> Response {
-    ask_approval(&broker, Kind::Passkey, peer, None)
+async fn add_passkey(
+    State(broker): State<Arc<Broker>>,
+    Allowed(peer): Allowed,
+    Json(request): Json<AddPasskey>,
+) -> Response {
+    ask_approval(
+        &broker,
+        Kind::Passkey {
+            replace: request.replace,
+        },
+        peer,
+        None,
+    )
 }
 
 #[derive(Deserialize)]

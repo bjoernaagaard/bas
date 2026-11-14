@@ -22,7 +22,7 @@ bas
 ├── rotate                       Linux and macOS
 ├── policy    edit, show         Linux and macOS
 ├── audit                        Linux and macOS
-└── passkey   add                Linux and macOS
+└── passkey   add, list          Linux and macOS
 ```
 
 Commands print references, metadata, and receipts. Only `bas get` prints a secret value, and only for a reference you allowed with `bas helper allow`, or, on a broker host, a reference in a `[helper.NAME]` entry of the broker's policy.
@@ -73,7 +73,8 @@ Commands print references, metadata, and receipts. Only `bas get` prints a secre
 | `bas policy edit` | | Opens the policy proposal in an editor, sends it, and waits for the approval |
 | `bas policy show` | `--json` | Lists every entry of the active policy and how to use it, without values |
 | `bas audit` | `--since <SINCE>`, `--name <NAME>`, `--unit <UNIT>` (Linux), `--json` | Prints the broker's audit entries: from the system journal on Linux, from the broker on macOS |
-| `bas passkey add` | | Asks an enrolled passkey to approve enrolling one more |
+| `bas passkey add` | `--replace` | Asks an enrolled passkey to approve enrolling one more. With `--replace`, the passkeys you enroll replace every enrolled passkey |
+| `bas passkey list` | `--json` | Lists the enrolled passkeys by name and the time each was added |
 
 The defaults of `bas broker` match the unit file on Linux and the LaunchDaemon on macOS.
 

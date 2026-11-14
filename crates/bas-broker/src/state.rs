@@ -95,8 +95,8 @@ impl Broker {
             Kind::Policy {
                 toml, base_hash, ..
             } => self.replace_policy(id, toml, base_hash).await,
-            Kind::Passkey => {
-                enroll_url = Some(self.passkeys.new_link());
+            Kind::Passkey { replace } => {
+                enroll_url = Some(self.passkeys.new_link(*replace));
                 Ok(serde_json::json!({ "enroll": "the link is shown on the approval page" }))
             }
         };

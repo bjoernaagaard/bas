@@ -11,7 +11,8 @@
 //!   verification, it replies 403 and the request stays pending.
 //! - `POST /a/ID/deny` denies the request. Denying grants nothing, so it needs no passkey.
 //! - `GET /enroll/TOKEN`, `POST /enroll/TOKEN/begin`, `POST /enroll/TOKEN/finish` enroll a
-//!   passkey with a one-time link.
+//!   passkey through an enrollment link. `begin` takes `{"label": "..."}` and refuses a
+//!   name that a passkey which stays enrolled already has.
 //!
 //! Every POST must carry the `Origin` of `approvals.origin`, so a page on another origin
 //! cannot deny requests or start ceremonies from the approval page.
@@ -40,6 +41,7 @@ use crate::approvals::{self, Kind, Outcome, View};
 use crate::config::Listen;
 use crate::files::bind_socket;
 use crate::passkeys::Refused;
+use crate::protocol::PasskeySummary;
 use crate::state::Broker;
 use crate::{Error, audit};
 
@@ -191,7 +193,8 @@ fn title(kind: &Kind) -> String {
         Kind::AddSecret { name, .. } => format!("Add secret {name}"),
         Kind::Rotate { name, .. } => format!("Rotate secret {name}"),
         Kind::Policy { .. } => "Change the policy".to_owned(),
-        Kind::Passkey => "Enroll another passkey".to_owned(),
+        Kind::Passkey { replace: false } => "Enroll another passkey".to_owned(),
+        Kind::Passkey { replace: true } => "Replace all passkeys".to_owned(),
     }
 }
 
@@ -217,7 +220,7 @@ async fn approval_page(State(broker): State<Arc<Broker>>, Path(id): Path<String>
             &[],
         );
     };
-    let body = describe(&view);
+    let body = describe(&view, &broker.passkeys.list());
     let id = view.id.hyphenated().to_string();
     let value = if view.kind.needs_value() { "1" } else { "0" };
     let state = state_label(&view.outcome);
@@ -234,7 +237,8 @@ async fn approval_page(State(broker): State<Arc<Broker>>, Path(id): Path<String>
     )
 }
 
-fn describe(view: &View) -> String {
+/// The approval page's text. `enrolled` names the passkeys a replace would remove.
+fn describe(view: &View, enrolled: &[PasskeySummary]) -> String {
     let mut body = String::from("<dl>");
     let pid = view
         .peer
@@ -299,11 +303,32 @@ fn describe(view: &View) -> String {
             }
             body.push_str("</pre>");
         }
-        Kind::Passkey => {
+        Kind::Passkey { replace: false } => {
             body.push_str(
                 "</dl><p>Approving shows a one-time link, valid for 15 minutes, that enrolls \
                  one more passkey.</p>",
             );
+        }
+        Kind::Passkey { replace: true } => {
+            body.push_str(
+                "</dl><p>Approving shows a link, valid for 15 minutes, that enrolls one or \
+                 more passkeys.</p><p class=\"warn\">This replaces all passkeys. The first \
+                 passkey enrolled through the link removes every passkey that is enrolled \
+                 when you approve. After that, only passkeys enrolled through the link can \
+                 approve.</p>",
+            );
+            if matches!(view.outcome, Outcome::Pending) {
+                body.push_str("<p>Enrolled now, and removed by the first enrollment:</p><ul>");
+                for passkey in enrolled {
+                    let _ = write!(
+                        body,
+                        "<li>{} <span class=\"muted\">added {}</span></li>",
+                        escape(&passkey.label),
+                        escape(&passkey.added)
+                    );
+                }
+                body.push_str("</ul>");
+            }
         }
     }
     if matches!(view.outcome, Outcome::Pending) {
@@ -488,26 +513,41 @@ async fn deny(
 }
 
 async fn enroll_page(State(broker): State<Arc<Broker>>, Path(token): Path<String>) -> Response {
-    if !broker.passkeys.link_valid(&token) {
+    let Some(replaces) = broker.passkeys.link_replaces(&token) else {
         return html(
             StatusCode::NOT_FOUND,
             "Link not valid",
             "<p>This enrollment link was used, expired, or never existed.</p>",
             &[],
         );
+    };
+    let mut body = String::from(
+        "<p>This enrolls a passkey that approves bas requests. It can live in a password \
+         manager, on this device, or on a security key. Each approval asks it to verify \
+         you.</p>",
+    );
+    if replaces {
+        body.push_str(
+            "<p class=\"warn\">This link replaces all passkeys. The first passkey you enroll \
+             here removes every passkey enrolled before the link was made. You can enroll \
+             more passkeys here until the link expires.</p>",
+        );
     }
-    let body = "<p>This enrolls a passkey that approves bas requests. It can live in a \
-                password manager, on this device, or on a security key. Each approval asks \
-                it to verify you.</p>\
-                <label for=\"label\">Name for this passkey</label>\
-                <input id=\"label\" type=\"text\" autocomplete=\"off\" maxlength=\"64\">\
-                <div class=\"actions\"><button id=\"enroll\">Create passkey</button></div>\
-                <p id=\"status\" role=\"status\"></p>";
+    body.push_str(
+        "<label for=\"label\">Name for this passkey</label>\
+         <input id=\"label\" type=\"text\" autocomplete=\"off\" maxlength=\"64\">\
+         <div class=\"actions\"><button id=\"enroll\">Create passkey</button></div>\
+         <p id=\"status\" role=\"status\"></p>",
+    );
     html(
         StatusCode::OK,
         "Enroll a passkey",
-        body,
-        &[("page", "enroll"), ("token", &token)],
+        &body,
+        &[
+            ("page", "enroll"),
+            ("token", &token),
+            ("again", if replaces { "1" } else { "0" }),
+        ],
     )
 }
 
@@ -515,14 +555,24 @@ async fn enroll_begin(
     State(broker): State<Arc<Broker>>,
     Path(token): Path<String>,
     headers: HeaderMap,
+    body: Bytes,
 ) -> Response {
     if !same_origin(&broker, &headers) {
         return json_error(StatusCode::FORBIDDEN, "wrong origin");
     }
-    match broker.passkeys.begin_enroll(&token) {
+    let Ok(start) = serde_json::from_slice::<EnrollStart>(&body) else {
+        return json_error(StatusCode::BAD_REQUEST, "send the passkey's name as JSON");
+    };
+    match broker.passkeys.begin_enroll(&token, &start.label) {
         Ok(challenge) => harden(Json(challenge).into_response()),
         Err(err) => enroll_refused(&err),
     }
+}
+
+#[derive(Deserialize)]
+struct EnrollStart {
+    #[serde(default)]
+    label: String,
 }
 
 #[derive(Deserialize)]
@@ -548,7 +598,9 @@ async fn enroll_finish(
         .passkeys
         .finish_enroll(&token, &enrollment.credential, &enrollment.label)
     {
-        Ok(()) => harden(Json(serde_json::json!({ "state": "enrolled" })).into_response()),
+        Ok(removed) => harden(
+            Json(serde_json::json!({ "state": "enrolled", "removed": removed })).into_response(),
+        ),
         Err(err) => enroll_refused(&err),
     }
 }

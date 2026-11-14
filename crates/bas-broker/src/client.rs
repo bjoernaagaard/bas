@@ -1,5 +1,5 @@
 //! The client side of the socket API, used by `bas run --with`, `bas get`, `bas add`, `bas rotate`,
-//! `bas policy edit`, `bas passkey add`, `bas audit` on macOS, and `bas tui` in broker
+//! `bas policy edit`, `bas passkey`, `bas audit` on macOS, and `bas tui` in broker
 //! mode.
 
 use std::path::{Path, PathBuf};
@@ -13,8 +13,8 @@ use serde::de::DeserializeOwned;
 use tokio::net::UnixStream;
 
 use crate::protocol::{
-    Accepted, ActivePolicy, AddSecret, ApprovalState, AuditEntries, DEFAULT_SOCKET, HelperRequest,
-    HelperValue, PolicyProposal, Refusal, RunReply, RunRequest, Status,
+    Accepted, ActivePolicy, AddPasskey, AddSecret, ApprovalState, AuditEntries, DEFAULT_SOCKET,
+    HelperRequest, HelperValue, PasskeyList, PolicyProposal, Refusal, RunReply, RunRequest, Status,
 };
 use crate::{Error, ErrorKind};
 
@@ -129,9 +129,22 @@ impl Client {
         self.call(Method::POST, "/v1/policy", Some(proposal)).await
     }
 
-    /// Asks for an approval that lets the approver enroll one more passkey.
-    pub async fn add_passkey(&self) -> Result<Outcome<serde_json::Value>, Error> {
-        self.call(Method::POST, "/v1/passkeys", Some(&serde_json::json!({})))
+    /// The enrolled passkeys, without their keys.
+    pub async fn passkeys(&self) -> Result<PasskeyList, Error> {
+        match self
+            .call::<(), _>(Method::GET, "/v1/passkeys", None)
+            .await?
+        {
+            Outcome::Done(list) => Ok(list),
+            Outcome::Waiting(_) => Err(Error::new("the bas broker sent an unexpected reply")),
+        }
+    }
+
+    /// Asks for an approval that lets the approver enroll one more passkey. With
+    /// `replace`, the link enrolls passkeys until it expires, and the first one removes
+    /// every passkey enrolled before it.
+    pub async fn add_passkey(&self, replace: bool) -> Result<Outcome<serde_json::Value>, Error> {
+        self.call(Method::POST, "/v1/passkeys", Some(&AddPasskey { replace }))
             .await
     }
 
