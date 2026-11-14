@@ -15,8 +15,8 @@ use std::sync::Arc;
 use arboard::Clipboard;
 use bas_broker::client::{Client, Outcome};
 use bas_broker::protocol::{
-    self, ActivePolicy, AddSecret, ApprovalState, EntryKind, EntrySummary, PolicyProposal,
-    SecretEntry, summarize_policy,
+    self, ActivePolicy, AddSecret, ApprovalState, EntryKind, EntrySummary, PasskeyList,
+    PolicyProposal, SecretEntry,
 };
 use bas_broker::{ErrorKind, proposal};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -30,6 +30,24 @@ use crate::ui::Status;
 const WAIT_SECONDS: u32 = 25;
 /// Ticks between status refreshes. Ticks come four times a second.
 const REFRESH_TICKS: u32 = 20;
+
+/// The sections of the entry list, in order, with the kind of entry each holds.
+pub const SECTIONS: [(EntryKind, &str); 6] = [
+    (EntryKind::Secret, "API keys"),
+    (EntryKind::Helper, "Values for config files"),
+    (EntryKind::Ssh, "SSH keys"),
+    (EntryKind::Github, "GitHub"),
+    (EntryKind::Tailscale, "Tailscale"),
+    (EntryKind::Other, "Other"),
+];
+
+/// The position in [`SECTIONS`] of the section that lists `kind`.
+pub fn section(kind: EntryKind) -> usize {
+    SECTIONS
+        .iter()
+        .position(|(listed, _)| *listed == kind)
+        .unwrap_or(SECTIONS.len())
+}
 
 /// A broker call that starts a request.
 type Call =
@@ -45,6 +63,8 @@ pub enum Update {
         result: Result<ActivePolicy, bas_broker::Error>,
         sync: bool,
     },
+    /// `GET /v1/passkeys` answered.
+    Passkeys(Result<PasskeyList, bas_broker::Error>),
     /// The request numbered `key` was sent.
     Sent {
         key: u64,
@@ -280,7 +300,11 @@ pub struct BrokerApp {
     events: EventHandler,
     client: Arc<Client>,
     pub connection: Connection,
-    /// The active policy's entries, once read.
+    /// This machine's name. The socket is local, so it is also the broker's machine.
+    pub hostname: String,
+    /// The labels of the enrolled passkeys, once read.
+    pub approvers: Option<Vec<String>>,
+    /// The active policy's entries, once read, sorted by [`section`].
     pub entries: Option<Vec<EntrySummary>>,
     /// Why the active policy could not be listed.
     pub policy_error: Option<String>,
@@ -307,6 +331,11 @@ impl BrokerApp {
             events,
             client: Arc::new(Client::new(socket)),
             connection: Connection::Connecting,
+            hostname: rustix::system::uname()
+                .nodename()
+                .to_string_lossy()
+                .into_owned(),
+            approvers: None,
             entries: None,
             policy_error: None,
             selected: 0,
@@ -322,6 +351,7 @@ impl BrokerApp {
             edit_requested: false,
         };
         app.load_policy(false);
+        app.load_passkeys();
         app
     }
 
@@ -393,6 +423,13 @@ impl BrokerApp {
         });
     }
 
+    fn load_passkeys(&self) {
+        let client = Arc::clone(&self.client);
+        self.events.spawn(async move {
+            AppEvent::Broker(Box::new(Update::Passkeys(client.passkeys().await)))
+        });
+    }
+
     /// Asks the broker for the state of approval `id`, waiting while it is pending.
     fn watch(&self, key: u64, id: String) {
         let client = Arc::clone(&self.client);
@@ -408,6 +445,14 @@ impl BrokerApp {
         match update {
             Update::Status(result) => self.on_status(result),
             Update::Policy { result, sync } => self.on_policy(result, sync),
+            Update::Passkeys(result) => {
+                self.approvers = result.ok().map(|list| {
+                    list.passkeys
+                        .into_iter()
+                        .map(|passkey| passkey.label)
+                        .collect()
+                });
+            }
             Update::Sent { key, result } => self.on_sent(key, result),
             Update::State { key, result } => self.on_state(key, result),
         }
@@ -472,13 +517,14 @@ impl BrokerApp {
                 return;
             }
         };
-        match summarize_policy(&policy.toml) {
-            Ok(entries) => {
+        match policy.entries() {
+            Ok(mut entries) => {
+                entries.sort_by_key(|entry| section(entry.kind));
                 self.selected = self.selected.min(entries.len().saturating_sub(1));
                 self.entries = Some(entries);
                 self.policy_error = None;
             }
-            Err(err) => self.policy_error = Some(format!("the active policy is unreadable: {err}")),
+            Err(err) => self.policy_error = Some(err),
         }
         if sync {
             let synced = proposal::path().and_then(|path| {
@@ -591,6 +637,7 @@ impl BrokerApp {
             let mine_change =
                 request.mine && matches!(kind, RequestKind::Add | RequestKind::Policy);
             self.load_policy(mine_change);
+            self.load_passkeys();
             self.refresh_status();
         }
     }
@@ -642,6 +689,7 @@ impl BrokerApp {
             KeyCode::Char('g') => {
                 self.refresh_status();
                 self.load_policy(false);
+                self.load_passkeys();
                 for request in &self.requests {
                     if let (RequestState::Failed(_), Some(id)) = (&request.state, &request.id) {
                         self.watch(request.key, id.clone());
@@ -693,8 +741,9 @@ impl BrokerApp {
         };
         if !entry.kind.rotatable() {
             let fix = match entry.kind {
-                EntryKind::Helper => "is a helper value; remove it with a policy change (e)",
-                _ => "is an ssh key; replace it with a policy change (e)",
+                EntryKind::Helper => "is a value for config files. Change the policy with e",
+                EntryKind::Ssh => "is an SSH key. Replace it by changing the policy with e",
+                _ => "is a kind of entry this bas does not know. Update bas to rotate it",
             };
             self.message = Status::Error(format!("{} {fix}", entry.name));
             return;

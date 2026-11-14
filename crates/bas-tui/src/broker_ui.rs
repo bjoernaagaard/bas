@@ -1,6 +1,6 @@
 //! Drawing for broker mode.
 
-use bas_broker::protocol::EntryKind;
+use bas_broker::protocol::{EntryKind, EntrySummary};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, Clear, ListItem, Paragraph, Widget, Wrap};
 
 use crate::broker::{
     AddField, AddForm, BrokerApp, Confirm, Connection, Focus, Modal, Request, RequestState,
+    SECTIONS, section,
 };
 use crate::ui::{centered, field_line, panel, render_list, status_line};
 
@@ -44,22 +45,18 @@ impl Widget for &BrokerApp {
 impl BrokerApp {
     fn render_header(&self, area: Rect, buf: &mut Buffer) {
         let state = match &self.connection {
-            Connection::Connecting => "connecting".to_owned(),
-            Connection::Connected {
-                version,
-                policy_hash,
-            } => format!(
-                "broker {version} | policy {}",
-                policy_hash.get(..12).unwrap_or(policy_hash)
-            ),
-            Connection::Failed(_) => "unreachable".to_owned(),
+            Connection::Connecting => "connecting to the broker".to_owned(),
+            Connection::Connected { version, .. } => format!("broker {version}"),
+            Connection::Failed(_) => "the broker does not answer".to_owned(),
+        };
+        let approvers = match self.approvers.as_deref() {
+            None => String::new(),
+            Some([]) => " | no passkey enrolled yet".to_owned(),
+            Some(labels) => format!(" | approvers: {}", labels.join(", ")),
         };
         Line::from(vec![
             " bas-tui ".bold().reversed(),
-            Span::raw(format!(
-                " Broker {} | {state} | values stay in the broker",
-                self.socket().display()
-            )),
+            Span::raw(format!(" {} | {state}{approvers}", self.hostname)),
         ])
         .render(area, buf);
     }
@@ -74,7 +71,16 @@ impl BrokerApp {
     }
 
     fn render_entries(&self, area: Rect, buf: &mut Buffer) {
-        let block = self.focused_panel("Policy entries", Focus::Entries);
+        let mut block = self.focused_panel("What this machine can use", Focus::Entries);
+        if let Connection::Connected { policy_hash, .. } = &self.connection {
+            block = block.title_bottom(
+                Line::from(format!(
+                    " policy {} ",
+                    policy_hash.get(..8).unwrap_or(policy_hash)
+                ))
+                .dim(),
+            );
+        }
         if let Connection::Failed(error) = &self.connection {
             Paragraph::new(vec![
                 Line::from("The broker did not answer.").bold(),
@@ -101,53 +107,81 @@ impl BrokerApp {
             return;
         };
         if entries.is_empty() {
-            Paragraph::new("The active policy has no entries. Press a to add a proxy secret, or e to edit the policy.")
-                .block(block)
-                .wrap(Wrap { trim: false })
-                .render(area, buf);
+            Paragraph::new(vec![
+                Line::from("Nothing yet. This machine can use no stored keys."),
+                Line::default(),
+                Line::from("Press a to add an API key, or e to write the policy in your editor."),
+            ])
+            .block(block)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
             return;
         }
-        let rows = entries.iter().map(|entry| {
-            ListItem::new(Line::from(vec![
-                Span::raw(entry.name.clone()),
-                Span::raw(format!("  {}", kind_label(entry.kind))).dim(),
-            ]))
-        });
-        render_list(rows, self.selected, block, area, buf);
+        // Room for a row's text inside the borders and the "> " marker.
+        let room = usize::from(area.width.saturating_sub(4));
+        let mut rows = Vec::new();
+        let mut position = 0;
+        let mut last_section = None;
+        for (index, entry) in entries.iter().enumerate() {
+            let section = section(entry.kind);
+            if last_section != Some(section) {
+                if last_section.is_some() {
+                    rows.push(ListItem::new(""));
+                }
+                let title = SECTIONS.get(section).map_or("Other", |(_, title)| title);
+                rows.push(ListItem::new(Line::from(title.to_owned()).bold()));
+                last_section = Some(section);
+            }
+            if index == self.selected {
+                position = rows.len();
+            }
+            rows.push(entry_row(entry, room));
+        }
+        render_list(rows.into_iter(), position, block, area, buf);
     }
 
     fn render_detail(&self, area: Rect, buf: &mut Buffer) {
-        let block = panel("Entry");
         let Some(entry) = self.selected_entry() else {
-            Paragraph::new("").block(block).render(area, buf);
+            Paragraph::new("").block(panel("Entry")).render(area, buf);
             return;
         };
-        let mut lines = vec![
-            field_line("Name", &entry.name),
-            field_line("Kind", kind_label(entry.kind)),
-            Line::default(),
-        ];
-        for (label, text) in &entry.details {
-            lines.push(field_line(label, text));
+        let mut lines: Vec<Line> = entry
+            .about
+            .iter()
+            .map(|text| Line::from(text.clone()))
+            .collect();
+        if !entry.usage.is_empty() {
+            lines.push(Line::default());
+            lines.push(Line::from("How to use it").bold());
+            lines.push(Line::from(format!("  {}", entry.usage)).fg(Color::Cyan));
+        }
+        if !entry.facts.is_empty() {
+            lines.push(Line::default());
+            lines.extend(
+                entry
+                    .facts
+                    .iter()
+                    .map(|fact| field_line(&fact.label, &fact.value)),
+            );
         }
         lines.push(Line::default());
-        lines.push(
-            Line::from(match entry.kind {
-                EntryKind::Secret => {
-                    "r rotate: you type the new value on the approval page, never here"
-                }
-                EntryKind::Github | EntryKind::Tailscale => {
-                    "r rotate: drops the cached tokens at once; the next request mints new ones"
-                }
-                EntryKind::Ssh => "Replace an ssh key with a policy change (e)",
-                EntryKind::Helper => {
-                    "bas get prints this value; remove it with a policy change (e)"
-                }
-            })
-            .dim(),
-        );
+        lines.push(Line::from(change_hint(entry.kind)));
+        if !entry.references.is_empty() {
+            lines.push(Line::default());
+        }
+        for reference in &entry.references {
+            let text = if reference.label.is_empty() {
+                format!("Stored in Bitwarden as {}", reference.value)
+            } else {
+                format!(
+                    "Stored in Bitwarden as {} ({})",
+                    reference.value, reference.label
+                )
+            };
+            lines.push(Line::from(text).dim());
+        }
         Paragraph::new(lines)
-            .block(block)
+            .block(panel(&entry.name))
             .wrap(Wrap { trim: false })
             .render(area, buf);
     }
@@ -155,10 +189,12 @@ impl BrokerApp {
     fn render_requests(&self, area: Rect, buf: &mut Buffer) {
         let block = self.focused_panel("Requests", Focus::Requests);
         if self.requests.is_empty() {
-            Paragraph::new("No requests yet. Requests you start, and pending ones from other clients, show here.")
-                .block(block)
-                .wrap(Wrap { trim: false })
-                .render(area, buf);
+            Paragraph::new(
+                "No requests yet. Your requests and pending ones from other clients show here.",
+            )
+            .block(block)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
             return;
         }
         let rows = self.requests.iter().map(request_row);
@@ -173,10 +209,10 @@ impl BrokerApp {
             (Some(Modal::Confirm(_)), _) => "y or Enter send  n or Esc cancel",
             (Some(_), _) => "any key closes",
             (None, Focus::Entries) => {
-                "a add  r rotate  e edit policy  p passkey  g refresh  Tab requests  ? keys  q quit"
+                "a add key  r replace  e edit  p passkey  g refresh  Tab requests  ? help  q quit"
             }
             (None, Focus::Requests) => {
-                "Enter details  c copy approval page  g refresh  Tab entries  ? keys  q quit"
+                "Enter details  c copy approval page  g refresh  Tab entries  ? help  q quit"
             }
         };
         format!(" {hints}")
@@ -185,7 +221,7 @@ impl BrokerApp {
     fn render_modal(&self, modal: &Modal, area: Rect, buf: &mut Buffer) {
         let (title, lines): (&str, Vec<Line>) = match modal {
             Modal::Help => ("Keys", help_lines()),
-            Modal::Add(form) => ("Add a proxy secret", add_lines(form)),
+            Modal::Add(form) => ("Add an API key", add_lines(form)),
             Modal::Confirm(confirm) => ("Confirm", confirm_lines(confirm)),
             Modal::Details(key) => (
                 "Request",
@@ -204,13 +240,39 @@ impl BrokerApp {
     }
 }
 
-fn kind_label(kind: EntryKind) -> &'static str {
+/// A list row: the name and its hint on one line when they fit in `room` columns, else
+/// the hint on a second line.
+fn entry_row(entry: &EntrySummary, room: usize) -> ListItem<'static> {
+    let name = Span::raw(entry.name.clone());
+    if entry.hint.is_empty() {
+        return ListItem::new(Line::from(name));
+    }
+    let one_line = Line::from(vec![
+        name.clone(),
+        Span::raw(format!("  {}", entry.hint)).dim(),
+    ]);
+    if one_line.width() <= room {
+        return ListItem::new(one_line);
+    }
+    ListItem::new(vec![
+        Line::from(name),
+        Line::from(format!("  {}", entry.hint)).dim(),
+    ])
+}
+
+/// What the keys of broker mode do to an entry of `kind`.
+fn change_hint(kind: EntryKind) -> &'static str {
     match kind {
-        EntryKind::Secret => "proxy secret",
-        EntryKind::Ssh => "ssh key",
-        EntryKind::Helper => "credential helper",
-        EntryKind::Github => "GitHub App",
-        EntryKind::Tailscale => "Tailscale OAuth client",
+        EntryKind::Secret => {
+            "Press r to replace the key. You type the new value on the approval page, never here."
+        }
+        EntryKind::Github | EntryKind::Tailscale => {
+            "Press r to throw away the current tokens. The next request makes new ones."
+        }
+        EntryKind::Helper | EntryKind::Ssh => {
+            "Press e to change or remove it in the policy. A passkey approves the change."
+        }
+        EntryKind::Other => "This bas is older than the broker. Update bas to change it here.",
     }
 }
 
@@ -355,16 +417,17 @@ fn confirm_lines(confirm: &Confirm) -> Vec<Line<'static>> {
 
 fn help_lines() -> Vec<Line<'static>> {
     [
-        "Broker mode manages the broker's policy. No value ever reaches this app.",
+        "This screen shows what the broker lets this machine use. Keys and other values",
+        "stay in the broker and never reach this app.",
         "",
-        "Everywhere: ? keys, g refresh, Tab switch list, q or Esc quit, Ctrl-C quit",
-        "Lists: Up/Down or k/j move",
-        "Entries: a add a proxy secret, r rotate the selected entry,",
-        "         e edit the policy proposal in $VISUAL or $EDITOR, p enroll a passkey",
-        "Requests: Enter details and diff, c copy the approval page address",
+        "Up and Down, or k and j, move in a list. Tab switches between the lists.",
+        "g reads everything again. ? shows this help. q, Esc, or Ctrl-C quits.",
         "",
-        "Every change waits for a passkey on the approval page. The requests list shows",
-        "sending, pending, approved, done, denied, expired, refused, and failed requests.",
+        "a adds an API key. r replaces the selected key or throws away its tokens.",
+        "e opens the policy in $VISUAL or $EDITOR. p enrolls one more passkey.",
+        "In the requests list, Enter shows a request and c copies its approval page.",
+        "",
+        "Every change waits until a passkey approves it on the approval page.",
         "",
         "Press any key to close",
     ]

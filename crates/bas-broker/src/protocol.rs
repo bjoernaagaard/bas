@@ -1,11 +1,15 @@
 //! Request and reply bodies of the broker's socket API, shared by the broker and the `bas`
 //! client commands. Only [`HelperValue`], the reply to `bas get` for a `[helper.NAME]`
 //! entry, holds a secret value.
+//!
+//! A client and a broker of different versions read each other's bodies. Unknown fields
+//! are ignored, so a field added to a reply carries `#[serde(default)]` for clients that
+//! talk to an older broker.
 
 use serde::{Deserialize, Serialize};
 
 pub use crate::policy::SecretFile as SecretEntry;
-pub use crate::policy::{EntryKind, EntrySummary, summarize as summarize_policy};
+pub use crate::summary::{Detail, EntryKind, EntrySummary};
 
 /// Socket the broker listens on unless told otherwise.
 #[cfg(target_os = "linux")]
@@ -28,6 +32,7 @@ pub struct Status {
     /// SHA-256 of the active policy text, in lowercase hex.
     pub policy_hash: String,
     /// Requests that wait for an approval, with what each asks for.
+    #[serde(default)]
     pub requests: Vec<PendingRequest>,
 }
 
@@ -161,6 +166,26 @@ pub struct ActivePolicy {
     pub hash: String,
     /// The active policy text.
     pub toml: String,
+    /// The broker's own list of the entries. Brokers 0.8.6 and older leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entries: Option<Vec<EntrySummary>>,
+}
+
+impl ActivePolicy {
+    /// The entries of the policy. A client reads the text itself only when the broker
+    /// sent no list, because a newer broker's text can hold settings this client does not
+    /// know.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the broker sent no list and this client cannot read the text.
+    pub fn entries(&self) -> Result<Vec<EntrySummary>, String> {
+        match &self.entries {
+            Some(entries) => Ok(entries.clone()),
+            None => crate::summary::summarize(&self.toml)
+                .map_err(|err| format!("the active policy is unreadable: {err}")),
+        }
+    }
 }
 
 /// Reply to a request that waits for a passkey approval (HTTP 202).

@@ -58,16 +58,16 @@ pub const EMPTY: &str = "version = 1\n";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct PolicyFile {
-    version: u32,
+pub(crate) struct PolicyFile {
+    pub(crate) version: u32,
     #[serde(default)]
-    secret: BTreeMap<String, SecretFile>,
+    pub(crate) secret: BTreeMap<String, SecretFile>,
     #[serde(default)]
-    helper: BTreeMap<String, HelperFile>,
+    pub(crate) helper: BTreeMap<String, HelperFile>,
     #[serde(default)]
-    ssh: BTreeMap<String, SshFile>,
-    github: Option<GithubFile>,
-    tailscale: Option<TailscaleFile>,
+    pub(crate) ssh: BTreeMap<String, SshFile>,
+    pub(crate) github: Option<GithubFile>,
+    pub(crate) tailscale: Option<TailscaleFile>,
 }
 
 /// One `[secret.NAME]` table, as `bas add` sends it and as it is written to the policy.
@@ -91,46 +91,46 @@ pub struct SecretFile {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct HelperFile {
+pub(crate) struct HelperFile {
     #[serde(rename = "ref")]
-    reference: String,
+    pub(crate) reference: String,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SshFile {
+pub(crate) struct SshFile {
     #[serde(rename = "ref")]
-    reference: String,
+    pub(crate) reference: String,
     #[serde(rename = "use")]
-    uses: Vec<String>,
+    pub(crate) uses: Vec<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct GithubFile {
-    app_id: u64,
-    private_key: String,
-    user_token: Option<String>,
+pub(crate) struct GithubFile {
+    pub(crate) app_id: u64,
+    pub(crate) private_key: String,
+    pub(crate) user_token: Option<String>,
     #[serde(default)]
-    repo: Vec<RepoFile>,
+    pub(crate) repo: Vec<RepoFile>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RepoFile {
-    name: String,
-    installation_id: u64,
+pub(crate) struct RepoFile {
+    pub(crate) name: String,
+    pub(crate) installation_id: u64,
     #[serde(default)]
-    permissions: BTreeMap<String, String>,
+    pub(crate) permissions: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct TailscaleFile {
-    client_id: String,
-    client_secret: String,
-    scopes: Vec<String>,
-    api_allow: Vec<String>,
+pub(crate) struct TailscaleFile {
+    pub(crate) client_id: String,
+    pub(crate) client_secret: String,
+    pub(crate) scopes: Vec<String>,
+    pub(crate) api_allow: Vec<String>,
 }
 
 /// Why a policy text was refused, with the 1-based line when one is known.
@@ -536,130 +536,6 @@ impl Policy {
         text.push_str(&added);
         Self::parse(&text, profile)
     }
-}
-
-/// What kind of entry a policy table is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EntryKind {
-    /// `[secret.NAME]`: a stored value the proxy adds for one host.
-    Secret,
-    /// `[helper.NAME]`: a stored value that `bas get` prints, for credential helpers.
-    Helper,
-    /// `[ssh.NAME]`: a key the ssh-agent signs with.
-    Ssh,
-    /// `[github]`: a GitHub App that mints repository tokens.
-    Github,
-    /// `[tailscale]`: an OAuth client that mints API tokens.
-    Tailscale,
-}
-
-impl EntryKind {
-    /// Whether `POST /v1/secrets/NAME/rotate` accepts the entry: a stored value is replaced
-    /// after an approval, and minted tokens are dropped at once.
-    #[must_use]
-    pub fn rotatable(self) -> bool {
-        !matches!(self, Self::Ssh | Self::Helper)
-    }
-}
-
-/// One entry of a policy text, for display. It names where values live, never a value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EntrySummary {
-    /// What kind of table it is.
-    pub kind: EntryKind,
-    /// The policy name: the `NAME` of `[secret.NAME]` or `[ssh.NAME]`, else `github` or
-    /// `tailscale`, which is also what `bas rotate` takes.
-    pub name: String,
-    /// Settings as label and text, in the order the table lists them.
-    pub details: Vec<(String, String)>,
-}
-
-/// Lists the entries of a policy text in the order the broker reads them: secrets,
-/// helpers, ssh keys, then `[github]` and `[tailscale]`. Checks only the shape of the text, not its
-/// references or rules.
-///
-/// # Errors
-///
-/// Fails with the TOML parser's message when the text is not a policy.
-pub fn summarize(text: &str) -> Result<Vec<EntrySummary>, String> {
-    let file: PolicyFile = toml::from_str(text).map_err(|err| err.message().to_owned())?;
-    let detail = |label: &str, text: String| (label.to_owned(), text);
-    let mut entries = Vec::new();
-    for (name, secret) in file.secret {
-        let mut details = vec![detail("ref", secret.reference)];
-        if let Some(host) = secret.host {
-            details.push(detail("host", host));
-        }
-        if let Some(header) = secret.header {
-            details.push(detail("header", header));
-        }
-        if let Some(value) = secret.value {
-            details.push(detail("value", value));
-        }
-        if let Some(allow) = secret.allow {
-            details.push(detail("allow", allow.join(", ")));
-        }
-        entries.push(EntrySummary {
-            kind: EntryKind::Secret,
-            name,
-            details,
-        });
-    }
-    for (name, helper) in file.helper {
-        entries.push(EntrySummary {
-            kind: EntryKind::Helper,
-            name,
-            details: vec![detail("ref", helper.reference)],
-        });
-    }
-    for (name, ssh) in file.ssh {
-        entries.push(EntrySummary {
-            kind: EntryKind::Ssh,
-            name,
-            details: vec![
-                detail("ref", ssh.reference),
-                detail("use", ssh.uses.join(", ")),
-            ],
-        });
-    }
-    if let Some(github) = file.github {
-        let mut details = vec![
-            detail("app_id", github.app_id.to_string()),
-            detail("private_key", github.private_key),
-        ];
-        if let Some(user_token) = github.user_token {
-            details.push(detail("user_token", user_token));
-        }
-        for repo in github.repo {
-            let permissions: Vec<String> = repo
-                .permissions
-                .iter()
-                .map(|(scope, level)| format!("{scope}={level}"))
-                .collect();
-            details.push(detail(
-                "repo",
-                format!("{} ({})", repo.name, permissions.join(", ")),
-            ));
-        }
-        entries.push(EntrySummary {
-            kind: EntryKind::Github,
-            name: "github".to_owned(),
-            details,
-        });
-    }
-    if let Some(tailscale) = file.tailscale {
-        entries.push(EntrySummary {
-            kind: EntryKind::Tailscale,
-            name: "tailscale".to_owned(),
-            details: vec![
-                detail("client_id", tailscale.client_id),
-                detail("client_secret", tailscale.client_secret),
-                detail("scopes", tailscale.scopes.join(", ")),
-                detail("api_allow", tailscale.api_allow.join(", ")),
-            ],
-        });
-    }
-    Ok(entries)
 }
 
 /// SHA-256 of a policy text, in lowercase hex.

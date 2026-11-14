@@ -38,4 +38,5 @@
 - [First-run messages](reference/first-run.md)
 - [Secrets Manager access](reference/secrets-manager-access.md)
 - [Security notes](reference/security.md)
+- [Broker socket replies](reference/socket-api.md)
 - [Build and check bas](reference/development.md)

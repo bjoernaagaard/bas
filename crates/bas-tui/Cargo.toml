@@ -18,6 +18,7 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 [target.'cfg(unix)'.dependencies]
 bas-broker.workspace = true
+rustix = { workspace = true, features = ["system"] }
 serde_json.workspace = true
 
 [lints]

@@ -29,6 +29,7 @@ mod proxy;
 mod server;
 mod ssh_agent;
 mod state;
+mod summary;
 
 pub use error::{Error, ErrorKind};
 pub use server::{Options, serve};
