@@ -107,7 +107,7 @@ curl -s --unix-socket /run/bas/broker.sock http://localhost/v1/status
 The status reply holds the version, the hash of the active policy, and the IDs of pending approvals. Until you approve a first policy, the active policy is empty and allows nothing.
 
 ```text
-{"version":"0.8.4","policy_hash":"<sha-256 of the policy text>","requests":[]}
+{"version":"0.8.5","policy_hash":"<sha-256 of the policy text>","requests":[]}
 ```
 
 If the broker doesn't start, `journalctl -u bas-broker -e` shows why, for example a malformed `broker.toml` or a token that Secrets Manager refused.

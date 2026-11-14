@@ -526,7 +526,7 @@ dependencies = [
 
 [[package]]
 name = "bas"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "aho-corasick",
  "ap-client",
@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "bas-broker"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "axum",
  "bas-core",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "bas-core"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "ap-client",
  "apple-native-keyring-store",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "bas-tui"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "arboard",
  "bas-broker",
