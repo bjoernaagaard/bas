@@ -14,7 +14,7 @@ use std::process::ExitCode;
 use bas_broker::client::{self, Client, Outcome};
 use bas_broker::proposal;
 use bas_broker::protocol::{
-    Accepted, AddSecret, ApprovalState, EntryKind, EntrySummary, HelperRequest, PolicyProposal,
+    Accepted, AddSecret, ApprovalState, Detail, EntryKind, HelperRequest, PolicyProposal,
     SecretEntry,
 };
 use bas_core::credential::SecretText;
@@ -65,21 +65,12 @@ pub fn helper_references() -> Result<Vec<String>> {
     let policy = crate::runtime()?
         .block_on(client().policy())
         .map_err(broker_error)?;
-    let entries = bas_broker::protocol::summarize_policy(&policy.toml).map_err(Error::new)?;
+    let entries = policy.entries().map_err(Error::new)?;
     Ok(entries
         .iter()
         .filter(|entry| entry.kind == EntryKind::Helper)
-        .filter_map(|entry| reference(entry).map(str::to_owned))
+        .filter_map(|entry| entry.detail("ref").map(str::to_owned))
         .collect())
-}
-
-/// The `ref` setting of a policy entry.
-fn reference(entry: &EntrySummary) -> Option<&str> {
-    entry
-        .details
-        .iter()
-        .find(|(label, _)| label == "ref")
-        .map(|(_, text)| text.as_str())
 }
 
 fn broker_error(err: bas_broker::Error) -> Error {
@@ -188,18 +179,12 @@ pub fn rotate(name: &str) -> Result<ExitCode> {
 /// One entry of `bas policy show`.
 #[derive(Serialize)]
 struct PolicyRow<'a> {
-    kind: &'static str,
+    kind: EntryKind,
     name: &'a str,
     #[serde(rename = "use")]
     usage: String,
     // A list, not an object: a label such as `repo` repeats once per repository.
-    details: Vec<Detail<'a>>,
-}
-
-#[derive(Serialize)]
-struct Detail<'a> {
-    label: &'a str,
-    value: &'a str,
+    details: &'a [Detail],
 }
 
 /// `bas policy show`: lists the entries of the active policy, without values.
@@ -207,36 +192,14 @@ pub fn policy_show(json: bool) -> Result<ExitCode> {
     let policy = crate::runtime()?
         .block_on(client().policy())
         .map_err(broker_error)?;
-    let entries = bas_broker::protocol::summarize_policy(&policy.toml).map_err(Error::new)?;
+    let entries = policy.entries().map_err(Error::new)?;
     let rows: Vec<PolicyRow<'_>> = entries
         .iter()
-        .map(|entry| {
-            let (kind, usage) = match entry.kind {
-                EntryKind::Secret => ("secret", format!("bas run --with {} -- CMD", entry.name)),
-                EntryKind::Helper => (
-                    "helper",
-                    format!("bas get {}", reference(entry).unwrap_or_default()),
-                ),
-                EntryKind::Ssh => (
-                    "ssh",
-                    "ssh and git through the broker's ssh-agent".to_owned(),
-                ),
-                EntryKind::Github => (
-                    "github",
-                    "gh and git for the listed repositories".to_owned(),
-                ),
-                EntryKind::Tailscale => ("tailscale", "bas run --with tailscale -- CMD".to_owned()),
-            };
-            PolicyRow {
-                kind,
-                name: &entry.name,
-                usage,
-                details: entry
-                    .details
-                    .iter()
-                    .map(|(label, value)| Detail { label, value })
-                    .collect(),
-            }
+        .map(|entry| PolicyRow {
+            kind: entry.kind,
+            name: &entry.name,
+            usage: entry.usage.clone(),
+            details: &entry.details,
         })
         .collect();
     let mut out = io::stdout().lock();
@@ -255,7 +218,9 @@ pub fn policy_show(json: bool) -> Result<ExitCode> {
             writeln!(
                 out,
                 "{:<9}  {}  use: {}{details}",
-                row.kind, row.name, row.usage
+                row.kind.label(),
+                row.name,
+                row.usage
             )
         })
     };

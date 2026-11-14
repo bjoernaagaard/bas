@@ -461,6 +461,7 @@ async fn active_policy(State(broker): State<Arc<Broker>>, Allowed(_): Allowed) -
     Json(ActivePolicy {
         hash: policy.hash().to_owned(),
         toml: policy.text().to_owned(),
+        entries: crate::summary::summarize(policy.text()).ok(),
     })
     .into_response()
 }
