@@ -22,6 +22,7 @@
 //! [github]
 //! app_id = 123456
 //! private_key = "bas://home/<secret-id>"
+//! user_token = "bas://home/<secret-id>"  # optional, for requests that name no repository
 //! [[github.repo]]
 //! name = "OWNER/REPO"
 //! installation_id = 7654321
@@ -109,6 +110,7 @@ struct SshFile {
 struct GithubFile {
     app_id: u64,
     private_key: String,
+    user_token: Option<String>,
     #[serde(default)]
     repo: Vec<RepoFile>,
 }
@@ -202,6 +204,8 @@ pub struct Github {
     pub app_id: u64,
     /// Where the App's private key (PEM) lives.
     pub private_key: SecretRef,
+    /// Where a GitHub user token lives, for requests that name no repository.
+    pub user_token: Option<SecretRef>,
     /// Repositories a token may be minted for, keyed by lowercase `owner/repo`.
     pub repos: BTreeMap<String, Repo>,
 }
@@ -623,6 +627,9 @@ pub fn summarize(text: &str) -> Result<Vec<EntrySummary>, String> {
             detail("app_id", github.app_id.to_string()),
             detail("private_key", github.private_key),
         ];
+        if let Some(user_token) = github.user_token {
+            details.push(detail("user_token", user_token));
+        }
         for repo in github.repo {
             let permissions: Vec<String> = repo
                 .permissions
@@ -669,6 +676,10 @@ fn github_table(
     at: &impl Fn(&str, String) -> Invalid,
 ) -> Result<Github, Invalid> {
     let private_key = reference(&github.private_key, "[github]", "private_key")?;
+    let user_token = github
+        .user_token
+        .map(|raw| reference(&raw, "[github]", "user_token"))
+        .transpose()?;
     let mut repos = BTreeMap::new();
     for repo in github.repo {
         let invalid = |reason: &str| at("[[github.repo]]", format!("github.repo: {reason}"));
@@ -698,6 +709,7 @@ fn github_table(
     Ok(Github {
         app_id: github.app_id,
         private_key,
+        user_token,
         repos,
     })
 }

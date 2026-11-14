@@ -15,7 +15,8 @@
 //!   installation token for one repository. The repository comes from the request path
 //!   (`/repos/OWNER/REPO/...` on the API, `/OWNER/REPO.git/...` for git) or from the proxy
 //!   user, as in `HTTPS_PROXY=http://gh:OWNER%2FREPO@127.0.0.1:3128`. It must be listed in
-//!   `[[github.repo]]`. On `github.com` only git's HTTPS paths are allowed.
+//!   `[[github.repo]]`. On `github.com` only git's HTTPS paths are allowed. A request that
+//!   names no repository gets the `[github]` `user_token`, and is refused without one.
 //! - With `[tailscale]`, `api.tailscale.com` gets an OAuth access token, for requests that
 //!   match `api_allow`.
 
@@ -346,21 +347,54 @@ impl Injector {
                     Ok(repo) => repo,
                     Err(reason) => return refuse(StatusCode::FORBIDDEN, reason),
                 };
-                let Some(entry) = github.repos.get(&repo.to_ascii_lowercase()) else {
-                    return refuse(StatusCode::FORBIDDEN, "repository not in [github]");
-                };
-                let minted = match self.broker.minter.github(github, entry).await {
-                    Ok(minted) => minted,
-                    Err(err) => {
-                        audit::deny_request("github", host, &method, &path, &err.to_string());
-                        return reply(StatusCode::BAD_GATEWAY, format!("bas broker: {err}\n"));
+                let (token, audit_name) = match (repo, &github.user_token) {
+                    (Some(repo), _) => {
+                        let Some(entry) = github.repos.get(&repo.to_ascii_lowercase()) else {
+                            return refuse(StatusCode::FORBIDDEN, "repository not in [github]");
+                        };
+                        match self.broker.minter.github(github, entry).await {
+                            Ok(minted) => (minted.token, format!("github:{}", entry.name)),
+                            Err(err) => {
+                                let reason = err.to_string();
+                                audit::deny_request("github", host, &method, &path, &reason);
+                                return reply(
+                                    StatusCode::BAD_GATEWAY,
+                                    format!("bas broker: {err}\n"),
+                                );
+                            }
+                        }
+                    }
+                    (None, Some(user_token)) => {
+                        match self.broker.session.get(user_token.id).await {
+                            Ok(found) => (
+                                Zeroizing::new(found.into_value().expose().to_owned()),
+                                "github:user".to_owned(),
+                            ),
+                            Err(err) => {
+                                tracing::warn!("could not read the [github] user_token: {err:?}");
+                                let reason = "could not read the user_token";
+                                audit::deny_request("github:user", host, &method, &path, reason);
+                                return reply(
+                                    StatusCode::BAD_GATEWAY,
+                                    "bas broker: could not read the [github] user_token\n"
+                                        .to_owned(),
+                                );
+                            }
+                        }
+                    }
+                    (None, None) => {
+                        return refuse(
+                            StatusCode::FORBIDDEN,
+                            "no repository: put it in the path or in the proxy user, as \
+                             gh:OWNER%2FREPO",
+                        );
                     }
                 };
                 let text = if host == "github.com" {
-                    let basic = Zeroizing::new(format!("x-access-token:{}", minted.token.as_str()));
+                    let basic = Zeroizing::new(format!("x-access-token:{}", token.as_str()));
                     format!("Basic {}", BASE64.encode(basic.as_bytes()))
                 } else {
-                    format!("Bearer {}", minted.token.as_str())
+                    format!("Bearer {}", token.as_str())
                 };
                 let Some(value) = policy::sensitive(&Zeroizing::new(text)) else {
                     return reply(
@@ -368,7 +402,7 @@ impl Injector {
                         "bas broker: unusable token\n".to_owned(),
                     );
                 };
-                (AUTHORIZATION, value, format!("github:{}", entry.name))
+                (AUTHORIZATION, value, audit_name)
             }
             (Tunnel::Tailscale { .. }, Some(Route::Tailscale(tailscale))) => {
                 if !tailscale.api_allow.allows(request.method(), request.uri()) {
@@ -403,8 +437,12 @@ impl Injector {
 }
 
 /// The repository a GitHub request is for: from the path when it names one, else from the
-/// proxy user. Both must agree when both exist.
-fn github_repo(host: &str, path: &str, claim: Option<&str>) -> Result<String, &'static str> {
+/// proxy user, else none. Both must agree when both exist.
+fn github_repo(
+    host: &str,
+    path: &str,
+    claim: Option<&str>,
+) -> Result<Option<String>, &'static str> {
     let mut parts = path.trim_start_matches('/').splitn(3, '/');
     let in_path = if host == "github.com" {
         let owner = parts.next().unwrap_or_default();
@@ -440,11 +478,9 @@ fn github_repo(host: &str, path: &str, claim: Option<&str>) -> Result<String, &'
         (Some(path_repo), Some(claim)) if !path_repo.eq_ignore_ascii_case(claim) => {
             Err("the path names another repository than the proxy user")
         }
-        (Some(repo), _) => Ok(repo),
-        (None, Some(claim)) => Ok(claim.to_owned()),
-        (None, None) => {
-            Err("no repository: put it in the path or in the proxy user, as gh:OWNER%2FREPO")
-        }
+        (Some(repo), _) => Ok(Some(repo)),
+        (None, Some(claim)) => Ok(Some(claim.to_owned())),
+        (None, None) => Ok(None),
     }
 }
 

@@ -87,14 +87,18 @@ on(request to a GitHub host)
     repository = OWNER/REPO from the path
   else if path starts with /repos/OWNER/REPO
     repository = OWNER/REPO from the path
+  else if the proxy user is gh:OWNER%2FREPO
+    repository = OWNER/REPO from the proxy user
+  else if [github] has user_token
+    add the user token and stop
   else
-    repository = OWNER/REPO from the proxy user gh:OWNER%2FREPO
+    refuse with 403
   if repository isn't in [[github.repo]]
     refuse with 403
   add a token for the one repository only
 ```
 
-When a request path names no repository, the proxy uses the repository that the `gh` shim names for the current directory, and without either one it refuses the request. Endpoints that need a user token, such as `gh api user`, fail, because GitHub refuses installation tokens there. Commands that need your own account, such as creating a gist or a repository under your name, don't work through the broker.
+When a request path names no repository, the proxy uses the repository that the `gh` shim names for the current directory. Without either one, the request needs your own account, as `gh auth status`, `gh api user`, and GraphQL `viewer` queries do, and GitHub refuses installation tokens there. Set `user_token` in `[github]` to a GitHub user token, such as a fine-grained personal access token, and the proxy adds it to these requests. The audit log records these as `github:user`. Without `user_token`, the proxy refuses them.
 
 ## git over HTTPS
 
@@ -122,7 +126,8 @@ Pushes and pull requests made with an App token show the App's bot as the actor.
 | `bas broker: could not mint a GitHub token for OWNER/REPO: [github] private_key is not an RSA private key in PEM` | The secret doesn't hold the whole `.pem` file |
 | `bas broker: could not mint a GitHub token for OWNER/REPO: GitHub refused: ...` | The App isn't installed on the repository, the installation ID is wrong, or the policy asks for a permission the App lacks |
 | `the bas policy has no [[github.repo]] entry for OWNER/REPO` or `refused by bas policy: repository not in [github]` | Add the repository to the policy |
-| `refused by bas policy: no repository: put it in the path or in the proxy user, as gh:OWNER%2FREPO` | Run `gh` inside a checkout whose `origin` is on GitHub, or name the repository in the path |
+| `refused by bas policy: no repository: put it in the path or in the proxy user, as gh:OWNER%2FREPO` | Run `gh` inside a checkout whose `origin` is on GitHub, name the repository in the path, or add `user_token` to `[github]` for requests about your own account |
+| `bas broker: could not read the [github] user_token` | The `user_token` reference is wrong, or the broker's machine account can't read it |
 | `the active policy has no [github] table, so the bas broker cannot mint GitHub tokens` | Add the `[github]` table |
 
 After you change the App's permissions or the installation, run `bas rotate github` so the broker drops its cached tokens and mints new ones on the next request.
