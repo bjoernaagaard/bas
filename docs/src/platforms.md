@@ -30,7 +30,7 @@ The macOS broker serves the same socket API, proxy, ssh-agent, and approval page
 Three limits hold on macOS:
 
 - The broker keeps values from your user only while your user isn't an administrator. An admin's password is worth root, and an agent that runs as you can capture it or wait for a Touch ID or security key touch at a `sudo` prompt. Make your daily account a standard user, as [Install the broker](broker/install.md#install-on-macos) describes.
-- Go programs on macOS, `gh` among them, ignore `SSL_CERT_FILE`, so they can't use the proxy. The macOS install ships no `gh` shim.
+- `gh` on macOS honors `SSL_CERT_FILE`, so the macOS install ships the same `gh` shim as Linux.
 - No firewall rule limits the proxy port to your user. Any local account can send requests through it, and the policy still decides what each request may do.
 
 ## Where the token lives

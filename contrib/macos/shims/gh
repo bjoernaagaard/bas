@@ -1,0 +1,10 @@
+#!/bin/sh
+# Runs the real gh through the bas broker proxy. The broker adds a GitHub App token for
+# the repository in the current directory, valid for one hour. gh never sees the token.
+shims=/usr/local/lib/bas/shims
+real=$(PATH=$(printf %s "$PATH" | tr ':' '\n' | grep -vx "$shims" | paste -sd: -) command -v gh)
+case "$1 $2" in "auth token") exit 1 ;; esac  # no raw token here; mise falls back to anonymous
+repo=$(git remote get-url origin 2>/dev/null | sed -E 's#^(ssh://)?(git@github\.com[:/]|https://github\.com/)##; s#\.git$##')
+proxy=http://127.0.0.1:3128
+case $repo in */*) proxy="http://gh:$(printf %s "$repo" | sed 's#/#%2F#')@127.0.0.1:3128" ;; esac
+HTTPS_PROXY=$proxy SSL_CERT_FILE=/var/run/bas/ca-bundle.pem GH_TOKEN=bas-proxied exec "$real" "$@"

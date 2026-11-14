@@ -276,6 +276,7 @@ contrib/macos/                                  installed as
 ├── io.github.bjoernaagaard.bas.broker.plist    /Library/LaunchDaemons/io.github.bjoernaagaard.bas.broker.plist
 ├── broker.toml.example                         /etc/bas/broker.toml
 ├── ../policy.toml.example                      ~/Library/Application Support/bas/policy.toml (your proposal)
+├── shims/gh                                    /usr/local/lib/bas/shims/gh
 ├── shims/ssh-keygen                            /usr/local/lib/bas/shims/ssh-keygen
 └── ssh_config.d/10-bas.conf                    /etc/ssh/ssh_config.d/10-bas.conf
 ```
@@ -335,7 +336,7 @@ sudo tailscale serve --service=svc:bas-mini --https=443 unix:/var/run/bas/approv
 sudo cat /var/db/bas/enroll-url
 ```
 
-Enroll the first passkey from that link as in step 7. Install the `ssh-keygen` shim and `10-bas.conf` from `contrib/macos/` as in steps 9 to 11. There is no `gh` shim on macOS: Go programs there check certificates with the system verifier and ignore `SSL_CERT_FILE`, so they can't use the proxy.
+Enroll the first passkey from that link as in step 7. Install the `gh` and `ssh-keygen` shims and `10-bas.conf` from `contrib/macos/` as in steps 9 to 11. The macOS `gh` shim reads the broker's certificate bundle from `/var/run/bas/ca-bundle.pem`.
 
 To remove the broker, run `sudo launchctl bootout system/io.github.bjoernaagaard.bas.broker` and `sudo launchctl bootout system/io.github.bjoernaagaard.bas.rundir`, then delete the files above.
 
