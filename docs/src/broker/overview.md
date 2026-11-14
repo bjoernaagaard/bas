@@ -102,7 +102,7 @@ The following requests need an approval:
 - `bas policy edit`, for any change to the policy
 - `bas add`, which also asks you to type the new value on the approval page
 - `bas rotate NAME` for a `[secret.NAME]` entry, which asks for the new value the same way
-- `bas passkey add`, to enroll one more passkey
+- `bas passkey add`, to enroll one more passkey, or `bas passkey add --replace`, to replace all of them
 
 A request waits up to 15 minutes. The broker keeps pending requests in memory, so a restart drops them. Denying a request needs no passkey, because a denial grants nothing.
 

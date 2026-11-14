@@ -54,7 +54,11 @@ pub enum Kind {
         diff: String,
     },
     /// `bas passkey add`: show a new enrollment link on the approval page.
-    Passkey,
+    Passkey {
+        /// `--replace`: the link enrolls passkeys until it expires, and the first one
+        /// removes every passkey enrolled when the link was made.
+        replace: bool,
+    },
 }
 
 impl Kind {
@@ -64,7 +68,7 @@ impl Kind {
             Self::AddSecret { .. } => "add",
             Self::Rotate { .. } => "rotate",
             Self::Policy { .. } => "policy",
-            Self::Passkey => "passkey",
+            Self::Passkey { .. } => "passkey",
         }
     }
 
@@ -73,7 +77,13 @@ impl Kind {
         match self {
             Self::AddSecret { name, .. } | Self::Rotate { name, .. } => name.clone(),
             Self::Policy { toml, .. } => crate::policy::hash(toml),
-            Self::Passkey => String::new(),
+            Self::Passkey { replace } => {
+                if *replace {
+                    "replace".to_owned()
+                } else {
+                    String::new()
+                }
+            }
         }
     }
 

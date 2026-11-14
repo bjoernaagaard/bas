@@ -180,7 +180,13 @@ fn dispatch(command: Command) -> Result<ExitCode> {
         #[cfg(unix)]
         Command::Audit(args) => broker_commands::audit(args),
         #[cfg(unix)]
-        Command::Passkey(cli::PasskeyCommand::Add) => broker_commands::passkey_add(),
+        Command::Passkey(cli::PasskeyCommand::Add(args)) => {
+            broker_commands::passkey_add(args.replace)
+        }
+        #[cfg(unix)]
+        Command::Passkey(cli::PasskeyCommand::List(args)) => {
+            broker_commands::passkey_list(args.json)
+        }
         Command::Grant(GrantCommand::Add(args)) => grant_add(args),
         Command::Grant(GrantCommand::List(args)) => grant_list(&args),
         Command::Grant(GrantCommand::Revoke(args)) => {

@@ -104,9 +104,30 @@ bas policy edit
 
 If the active policy changes while a proposal waits for approval, for example because of a `bas add`, the approval fails with "the active policy changed after this request", so one change can't silently undo another. Run `bas policy edit` again. If you sync your proposal to other machines, each broker asks for its own approval.
 
-## Add a passkey
+## Manage passkeys
+
+`bas passkey list` shows which passkeys can approve requests, by name and the time each was added. It needs no approval and never shows a key.
+
+```sh
+$ bas passkey list
+home  added 2026-03-02T09:14:55Z
+iphone  added 2026-05-11T18:40:02Z
+```
 
 `bas passkey add` asks an enrolled passkey to approve one more. After you approve, the approval page shows a one-time enrollment link, valid for 15 minutes. Open it on the device that should hold the new passkey. The link never appears in the terminal.
+
+`bas passkey add --replace` swaps every enrolled passkey for new ones with one approval. The approval page lists the passkeys that will be removed. After you approve, the page shows an enrollment link that enrolls as many passkeys as you like for 15 minutes.
+
+```text
+bas passkey add --replace
+├── approve with an enrolled passkey: home, iphone
+├── open the link, enroll a YubiKey named home
+│   └── home and iphone are removed, and the audit log records each removal
+├── on the same page, choose Enroll another passkey, and enroll a YubiKey named carry
+└── bas passkey list shows only the new home and carry
+```
+
+Each name must be unique among the passkeys that stay. A new passkey may reuse the name of one that the replace removes. Enroll the second key before the link expires, or ask for a new link with `bas passkey add`.
 
 ## Read the audit log
 
@@ -129,6 +150,7 @@ bas audit --json --since 30m
 | `policy` | a new policy became active |
 | `rotate` | `bas rotate` dropped minted tokens |
 | `enroll` | a passkey was enrolled |
+| `remove` | a replace link removed a passkey |
 | `deny` | the broker refused a caller, a name, a request, or an approval |
 
 On Linux, `--unit` or `BAS_BROKER_UNIT` reads another unit, such as a test unit called `bas-broker-dev`.

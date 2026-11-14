@@ -259,6 +259,16 @@ pub fn enroll(label: &str) {
     );
 }
 
+/// Records a passkey removed by the first enrollment through a replace link.
+pub fn remove_passkey(label: &str) {
+    tracing::info!(
+        bas_audit = 1,
+        event = "remove",
+        name = label,
+        "removed passkey {label}"
+    );
+}
+
 /// Records a request the policy or the peer check refused.
 pub fn deny_peer(peer: Peer, reason: &str) {
     tracing::info!(

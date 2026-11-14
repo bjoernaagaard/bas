@@ -754,7 +754,7 @@ impl BrokerApp {
                 self.send(
                     "passkey enrollment".to_owned(),
                     RequestKind::Passkey,
-                    |client| Box::pin(async move { client.add_passkey().await }),
+                    |client| Box::pin(async move { client.add_passkey(false).await }),
                 );
             }
         }

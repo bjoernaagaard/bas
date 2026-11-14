@@ -228,7 +228,30 @@ pub enum PasskeyCommand {
     ///
     /// The approval page shows a one-time link, valid for 15 minutes. Open it on the
     /// device that should hold the new passkey. The link never reaches this terminal.
-    Add,
+    Add(PasskeyAddArgs),
+    /// List the passkeys that can approve requests, by name and the time each was added.
+    List(PasskeyListArgs),
+}
+
+#[cfg(unix)]
+#[derive(Debug, Args)]
+pub struct PasskeyAddArgs {
+    /// Replace every enrolled passkey with the ones you enroll through the link.
+    ///
+    /// The link stays valid for 15 minutes and enrolls as many passkeys as you like. The
+    /// first passkey enrolled through it removes every passkey that was enrolled when you
+    /// approved, so they can no longer approve. A new passkey may reuse the name of one
+    /// it removes.
+    #[arg(long)]
+    pub replace: bool,
+}
+
+#[cfg(unix)]
+#[derive(Debug, Args)]
+pub struct PasskeyListArgs {
+    /// Print {"passkeys":[{"label","added"}]} instead of text.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[cfg(unix)]

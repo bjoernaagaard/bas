@@ -104,10 +104,11 @@ async function deny() {
 }
 
 async function enroll() {
+  const labelField = document.getElementById("label");
   setButtons(true);
   try {
     show("Creating the passkey...");
-    const options = await post(`/enroll/${page.token}/begin`);
+    const options = await post(`/enroll/${page.token}/begin`, { label: labelField.value });
     const publicKey = options.publicKey;
     publicKey.challenge = toBytes(publicKey.challenge);
     publicKey.user.id = toBytes(publicKey.user.id);
@@ -116,8 +117,8 @@ async function enroll() {
     const transports = credential.response.getTransports
       ? credential.response.getTransports()
       : undefined;
-    await post(`/enroll/${page.token}/finish`, {
-      label: document.getElementById("label").value,
+    const reply = await post(`/enroll/${page.token}/finish`, {
+      label: labelField.value,
       credential: {
         id: credential.id,
         rawId: toText(credential.rawId),
@@ -130,8 +131,19 @@ async function enroll() {
         },
       },
     });
-    show("Enrolled. This passkey can now approve bas requests.", "ok");
-    for (const button of document.querySelectorAll("button")) button.remove();
+    let text = "Enrolled. This passkey can now approve bas requests.";
+    if (reply.removed && reply.removed.length > 0) {
+      text += " Removed: " + reply.removed.join(", ") + ".";
+    }
+    show(text, "ok");
+    if (page.again === "1") {
+      labelField.value = "";
+      const button = document.getElementById("enroll");
+      button.textContent = "Enroll another passkey";
+      button.disabled = false;
+    } else {
+      for (const button of document.querySelectorAll("button")) button.remove();
+    }
   } catch (err) {
     show("Not enrolled: " + err.message, "error");
     setButtons(false);
