@@ -1,4 +1,4 @@
-//! `bas add`, `bas rotate`, `bas policy edit`, `bas passkey add`, `bas audit`, and the broker
+//! `bas add`, `bas rotate`, `bas policy edit`, `bas passkey`, `bas audit`, and the broker
 //! side of `bas get` and `bas helper list`: the commands that talk to the bas broker or read
 //! its journal. Linux and macOS.
 //!
@@ -303,17 +303,44 @@ pub fn policy_edit() -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// `bas passkey add`.
-pub fn passkey_add() -> Result<ExitCode> {
+/// `bas passkey add [--replace]`.
+pub fn passkey_add(replace: bool) -> Result<ExitCode> {
     let client = client();
     let outcome = crate::runtime()?
-        .block_on(client.add_passkey())
+        .block_on(client.add_passkey(replace))
         .map_err(broker_error)?;
     let Outcome::Waiting(accepted) = outcome else {
         return Err(Error::new("the bas broker sent an unexpected reply"));
     };
+    if replace {
+        eprintln!(
+            "The first passkey enrolled through the link removes every passkey enrolled now."
+        );
+    }
     wait(&client, &accepted)?;
-    say("approved; the approval page shows the one-time enrollment link")?;
+    say(if replace {
+        "approved; the approval page shows the enrollment link, which enrolls passkeys \
+         for 15 minutes"
+    } else {
+        "approved; the approval page shows the one-time enrollment link"
+    })?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `bas passkey list`: the enrolled passkeys, by name and the time each was added.
+pub fn passkey_list(json: bool) -> Result<ExitCode> {
+    let list = crate::runtime()?
+        .block_on(client().passkeys())
+        .map_err(broker_error)?;
+    let mut out = io::stdout().lock();
+    let written = if json {
+        output::write_json(&mut out, &list)
+    } else {
+        list.passkeys
+            .iter()
+            .try_for_each(|passkey| writeln!(out, "{}  added {}", passkey.label, passkey.added))
+    };
+    written.map_err(crate::stdout_failed)?;
     Ok(ExitCode::SUCCESS)
 }
 
