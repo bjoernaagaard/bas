@@ -35,7 +35,7 @@ Three limits hold on macOS:
 
 ## Where the token lives
 
-`bas auth login` saves the machine token in the credential store of the operating system. On macOS, the store is the login keychain, and a locked keychain makes the sign-in fail with a message that names it. Run `security unlock-keychain` and try again. On Windows, the store is the Windows Credential Manager.
+`bas auth login` saves the machine token in the credential store of the operating system. On macOS, the store is the login keychain, and a locked keychain makes the sign-in fail with a message that names it. Run `security unlock-keychain` and try again. Every macOS release is signed with the same certificate under the identifier `dev.bas`, so an answer of "Always Allow" lasts across upgrades. A build you compile yourself isn't signed with it, and the keychain asks about that build again. On Windows, the store is the Windows Credential Manager.
 
 ```mermaid
 flowchart LR

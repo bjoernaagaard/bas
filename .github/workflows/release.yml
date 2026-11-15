@@ -12,6 +12,8 @@ permissions:
 jobs:
   build:
     uses: ./.github/workflows/ci.yml
+    secrets:
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
 
   release:
     if: startsWith(github.ref, 'refs/tags/')

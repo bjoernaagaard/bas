@@ -7,6 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:
   workflow_call:
+    secrets:
+      MACOS_SIGNING_IDENTITY:
+        required: true
 
 permissions:
   contents: read
@@ -83,6 +86,30 @@ jobs:
         run: cargo doc --locked --no-deps
       - name: Build release executables
         run: cargo build --locked --release --bin bas --example e2e
+      # The keychain lets a program read its own items without asking only while its
+      # signature names the same identity. An unsigned build is named by its hash, which
+      # changes with every release. One certificate for every release keeps the name.
+      - name: Sign the macOS executable
+        if: runner.os == 'macOS'
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(uuidgen)"
+          identity="$RUNNER_TEMP/identity.pem"
+          printf '%s\n' "$MACOS_SIGNING_IDENTITY" > "$identity"
+          security create-keychain -p "$password" "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$identity" -k "$keychain" -T /usr/bin/codesign
+          rm "$identity"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          leaf="$(security find-certificate -Z "$keychain" | awk '/SHA-1/ { print $NF }')"
+          codesign --force --sign "$leaf" --keychain "$keychain" --identifier dev.bas target/release/bas
+          security delete-keychain "$keychain"
+          codesign --verify --strict target/release/bas
+          codesign -d -r- target/release/bas 2>&1 |
+            grep -F 'designated => identifier "dev.bas" and certificate leaf = H"'
       - name: Package and check the extracted executable
         env:
           BUILD_OS: ${{ runner.os }}
