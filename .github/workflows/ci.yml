@@ -104,8 +104,10 @@ jobs:
           security import "$identity" -k "$keychain" -T /usr/bin/codesign
           rm "$identity"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          # codesign finds an identity only in a keychain on the search list.
+          security list-keychains -d user -s "$keychain" login.keychain-db
           leaf="$(security find-certificate -Z "$keychain" | awk '/SHA-1/ { print $NF }')"
-          codesign --force --sign "$leaf" --keychain "$keychain" --identifier dev.bas target/release/bas
+          codesign --force --sign "$leaf" --identifier dev.bas target/release/bas
           security delete-keychain "$keychain"
           codesign --verify --strict target/release/bas
           codesign -d -r- target/release/bas 2>&1 |
