@@ -3,6 +3,7 @@
 //! SDK request and response types stay inside this module. Callers receive
 //! [`Identifier`] metadata and [`Secret`] values whose `Debug` output is redacted.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use bitwarden::secrets_manager::projects::{
@@ -621,21 +622,35 @@ impl Session {
     /// Returns the classified failure, or [`Failure::NotDeleted`] when the server answered
     /// without deleting the secret.
     pub async fn delete(&self, id: Uuid) -> Result<(), Failure> {
-        let response = self
-            .client
-            .secrets()
-            .delete(SecretsDeleteRequest { ids: vec![id] })
-            .await
-            .map_err(|err| Failure::classify(&err))?;
-        if response
-            .data
-            .iter()
-            .any(|item| item.id == id && item.error.is_none())
-        {
+        if self.delete_many(&[id]).await?.contains(&id) {
             Ok(())
         } else {
             Err(Failure::NotDeleted)
         }
+    }
+
+    /// Deletes several secrets in one request and returns the ones the server deleted.
+    /// The server moves them to the organization's trash, as [`Session::delete`] describes.
+    ///
+    /// The server answers for each secret on its own, so a requested ID missing from the
+    /// returned set was not deleted.
+    ///
+    /// # Errors
+    ///
+    /// Returns the classified failure when the request as a whole failed.
+    pub async fn delete_many(&self, ids: &[Uuid]) -> Result<BTreeSet<Uuid>, Failure> {
+        let response = self
+            .client
+            .secrets()
+            .delete(SecretsDeleteRequest { ids: ids.to_vec() })
+            .await
+            .map_err(|err| Failure::classify(&err))?;
+        Ok(response
+            .data
+            .into_iter()
+            .filter(|item| item.error.is_none())
+            .map(|item| item.id)
+            .collect())
     }
 
     /// Lists the projects the machine account can read.

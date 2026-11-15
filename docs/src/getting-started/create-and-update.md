@@ -37,7 +37,7 @@ flowchart TD
     B -->|no or failed| N[outcome written_unverified, exit 3]
 ```
 
-Don't retry a create or an update automatically when the outcome is unclear. Check the secret in the web vault first. `bas` has no command that deletes a secret, and the terminal UI (`bas tui`) can delete one after you type its key.
+Don't retry a create or an update automatically when the outcome is unclear. Check the secret in the web vault first. `bas` has no command that deletes a secret, and the terminal UI (`bas tui`) can delete one after you type its key. To delete several at once, mark each with Space in the secrets list, press `d`, and type how many you marked.
 
 ## Exit codes
 

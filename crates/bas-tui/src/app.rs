@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -69,9 +69,21 @@ pub struct SecretsScreen {
     pub selected: usize,
     pub filter: String,
     pub filtering: bool,
+    /// Secrets marked for a bulk delete. A mark stays while the filter hides its row.
+    pub marked: BTreeSet<Uuid>,
 }
 
 impl SecretsScreen {
+    /// The marked secrets with their keys, in list order.
+    fn marked_items(&self) -> Vec<(Uuid, String)> {
+        self.items
+            .iter()
+            .flatten()
+            .filter(|item| self.marked.contains(&item.id()))
+            .map(|item| (item.id(), item.key().to_owned()))
+            .collect()
+    }
+
     /// Listings whose key contains the filter, ignoring case.
     pub fn visible(&self) -> Vec<&Identifier> {
         let needle = self.filter.to_lowercase();
@@ -138,6 +150,15 @@ enum Direction {
     Previous,
 }
 
+/// A move of the selected row in a list.
+#[derive(Clone, Copy)]
+enum Motion {
+    Next,
+    Previous,
+    First,
+    Last,
+}
+
 /// Create or edit form for one secret.
 pub struct SecretForm {
     /// The secret being edited, or `None` for a new one.
@@ -193,6 +214,13 @@ pub enum DeleteTarget {
         key: String,
         listing: Option<Uuid>,
     },
+    /// The marked secrets of one list, each with its key. `count` is how many there are,
+    /// as the text to type.
+    Secrets {
+        secrets: Vec<(Uuid, String)>,
+        count: String,
+        listing: Option<Uuid>,
+    },
     Project {
         id: Uuid,
         name: String,
@@ -204,6 +232,7 @@ impl DeleteTarget {
     pub fn name(&self) -> &str {
         match self {
             Self::Secret { key, .. } => key,
+            Self::Secrets { count, .. } => count,
             Self::Project { name, .. } => name,
         }
     }
@@ -414,7 +443,7 @@ impl App {
         &mut self,
         project: Option<Uuid>,
         listed: Listed<Identifier>,
-        done: Option<String>,
+        done: Option<Status>,
     ) {
         if listed.started
             < self
@@ -424,7 +453,7 @@ impl App {
                 .unwrap_or_default()
         {
             if let Some(done) = done {
-                self.status = Status::Info(done);
+                self.status = done;
             }
             return;
         }
@@ -432,7 +461,9 @@ impl App {
             Ok(items) => items,
             Err(err) => {
                 self.status = Status::Error(match done {
-                    Some(done) => format!("{done}, but re-reading the secrets failed: {err}"),
+                    Some(Status::Info(done) | Status::Error(done)) => {
+                        format!("{done}, but re-reading the secrets failed: {err}")
+                    }
                     None => format!("Could not list secrets: {err}"),
                 });
                 return;
@@ -440,15 +471,14 @@ impl App {
         };
         self.secrets_started.insert(project, listed.started);
         if done.is_some() || !matches!(self.status, Status::Error(_)) {
-            self.status = Status::Info(done.unwrap_or_else(|| match items.len() {
-                1 => "1 secret".to_owned(),
-                count => format!("{count} secrets"),
-            }));
+            self.status = done.unwrap_or_else(|| Status::Info(secret_count(items.len())));
         }
         for screen in &mut self.screens {
             if let Screen::Secrets(list) = screen
                 && list.project == project
             {
+                list.marked
+                    .retain(|id| items.iter().any(|item| item.id() == *id));
                 list.items = Some(items.clone());
                 let visible = list.visible().len();
                 list.selected = list.selected.min(visible.saturating_sub(1));
@@ -541,6 +571,7 @@ impl App {
 
     fn handle_screen_key(&mut self, key: KeyEvent) {
         match key.code {
+            KeyCode::Esc if self.clear_marks() => {}
             KeyCode::Char('q') | KeyCode::Esc => self.back(),
             KeyCode::Char('?') => self.modal = Some(Modal::Help),
             KeyCode::Char('w') => {
@@ -548,8 +579,10 @@ impl App {
                     self.screens.push(Screen::WebVault);
                 }
             }
-            KeyCode::Up | KeyCode::Char('k') => self.move_selection(Direction::Previous),
-            KeyCode::Down | KeyCode::Char('j') => self.move_selection(Direction::Next),
+            KeyCode::Up | KeyCode::Char('k') => self.move_selection(Motion::Previous),
+            KeyCode::Down | KeyCode::Char('j') => self.move_selection(Motion::Next),
+            KeyCode::Char('g') => self.move_selection(Motion::First),
+            KeyCode::Char('G') => self.move_selection(Motion::Last),
             _ => match self.screens.last() {
                 Some(Screen::Projects { .. }) => self.handle_projects_key(key),
                 Some(Screen::Secrets(_)) => self.handle_secrets_key(key),
@@ -567,7 +600,17 @@ impl App {
         }
     }
 
-    fn move_selection(&mut self, direction: Direction) {
+    /// Removes every mark from the secrets list on top. False when it had none.
+    fn clear_marks(&mut self) -> bool {
+        let Some(Screen::Secrets(list)) = self.screens.last_mut() else {
+            return false;
+        };
+        let had_marks = !list.marked.is_empty();
+        list.marked.clear();
+        had_marks
+    }
+
+    fn move_selection(&mut self, motion: Motion) {
         let project_rows = self.projects.len() + 1;
         let (selected, rows) = match self.screens.last_mut() {
             Some(Screen::Projects { selected }) => (selected, project_rows),
@@ -577,9 +620,12 @@ impl App {
             }
             _ => return,
         };
-        *selected = match direction {
-            Direction::Next => (*selected + 1).min(rows.saturating_sub(1)),
-            Direction::Previous => selected.saturating_sub(1),
+        let last = rows.saturating_sub(1);
+        *selected = match motion {
+            Motion::Next => (*selected + 1).min(last),
+            Motion::Previous => selected.saturating_sub(1),
+            Motion::First => 0,
+            Motion::Last => last,
         };
     }
 
@@ -629,6 +675,7 @@ impl App {
                     selected: 0,
                     filter: String::new(),
                     filtering: false,
+                    marked: BTreeSet::new(),
                 }));
                 self.load_secrets(&session, project, None);
             }
@@ -682,10 +729,28 @@ impl App {
                 }
             }
             KeyCode::Char('n') => self.open_new_form(),
+            KeyCode::Char(' ') => {
+                if let Some((id, _)) = selected {
+                    if !list.marked.remove(&id) {
+                        list.marked.insert(id);
+                    }
+                    self.move_selection(Motion::Next);
+                }
+            }
             KeyCode::Char('d') => {
-                if let Some((id, key)) = selected {
+                let secrets = list.marked_items();
+                let target = if secrets.is_empty() {
+                    selected.map(|(id, key)| DeleteTarget::Secret { id, key, listing })
+                } else {
+                    Some(DeleteTarget::Secrets {
+                        count: secrets.len().to_string(),
+                        secrets,
+                        listing,
+                    })
+                };
+                if let Some(target) = target {
                     self.modal = Some(Modal::Delete {
-                        target: DeleteTarget::Secret { id, key, listing },
+                        target,
                         typed: String::new(),
                     });
                 }
@@ -1008,9 +1073,30 @@ impl App {
                         Ok(()) => AppEvent::Secrets {
                             project: listing,
                             listed: list_secrets(&session, &clock, listing).await,
-                            done: Some(format!("Moved {key} to trash. Restore it at {trash}")),
+                            done: Some(Status::Info(format!(
+                                "Moved {key} to trash. Restore it at {trash}"
+                            ))),
                         },
                         Err(failure) => write_failed(format!("delete {key}"), failure, None),
+                    }
+                });
+            }
+            DeleteTarget::Secrets {
+                secrets, listing, ..
+            } => {
+                let total = secret_count(secrets.len());
+                self.status = Status::Info(format!("Deleting {total}"));
+                let trash = self.trash_url();
+                let clock = Arc::clone(&self.list_clock);
+                self.events.spawn(async move {
+                    let ids: Vec<Uuid> = secrets.iter().map(|(id, _)| *id).collect();
+                    match session.delete_many(&ids).await {
+                        Ok(deleted) => AppEvent::Secrets {
+                            project: listing,
+                            listed: list_secrets(&session, &clock, listing).await,
+                            done: Some(bulk_delete_status(&secrets, &deleted, &trash)),
+                        },
+                        Err(failure) => write_failed(format!("delete {total}"), failure, None),
                     }
                 });
             }
@@ -1053,7 +1139,7 @@ impl App {
             AppEvent::Secrets {
                 project,
                 listed: list_secrets(&session, &clock, project).await,
-                done,
+                done: done.map(Status::Info),
             }
         });
     }
@@ -1168,6 +1254,34 @@ async fn current_project_ids(session: &Session, id: Uuid) -> color_eyre::Result<
         .find(|identifier| identifier.id() == id)
         .map(|identifier| identifier.project_ids().to_vec())
         .ok_or_else(|| color_eyre::eyre::eyre!("could not confirm the secret's current projects"))
+}
+
+/// The status line after a bulk delete of `secrets`, of which the server deleted `deleted`.
+/// Secrets the server kept are named, and they stay marked in the list.
+fn bulk_delete_status(secrets: &[(Uuid, String)], deleted: &BTreeSet<Uuid>, trash: &str) -> Status {
+    let kept: Vec<&str> = secrets
+        .iter()
+        .filter(|(id, _)| !deleted.contains(id))
+        .map(|(_, key)| key.as_str())
+        .collect();
+    let total = secret_count(secrets.len());
+    if kept.is_empty() {
+        Status::Info(format!("Moved {total} to trash. Restore at {trash}"))
+    } else {
+        Status::Error(format!(
+            "Moved {} of {total} to trash. Secrets Manager did not delete {}",
+            secrets.len() - kept.len(),
+            kept.join(", ")
+        ))
+    }
+}
+
+/// A count of secrets as words, such as "1 secret" or "3 secrets".
+pub(crate) fn secret_count(count: usize) -> String {
+    match count {
+        1 => "1 secret".to_owned(),
+        count => format!("{count} secrets"),
+    }
 }
 
 /// The event for a failed write. Only a refusal is known to have changed nothing. `form` is

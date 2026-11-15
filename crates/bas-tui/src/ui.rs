@@ -11,7 +11,7 @@ use ratatui::widgets::{
 };
 
 use crate::app::{
-    App, DeleteTarget, Field, Modal, Screen, SecretForm, SecretScreen, SecretsScreen,
+    App, DeleteTarget, Field, Modal, Screen, SecretForm, SecretScreen, SecretsScreen, secret_count,
 };
 
 /// The status line.
@@ -20,6 +20,10 @@ pub enum Status {
     Info(String),
     Error(String),
 }
+
+/// How many keys the bulk delete dialog names before it counts the rest, so the dialog
+/// fits a 24-row terminal.
+const MAX_KEYS_IN_DIALOG: usize = 10;
 
 /// Shown in place of a hidden value. Fixed width, so it does not reveal the length.
 pub(crate) const HIDDEN: &str = "••••••••";
@@ -77,10 +81,14 @@ impl App {
     }
 
     fn secrets_title(&self, list: &SecretsScreen) -> String {
-        list.project.map_or_else(
+        let title = list.project.map_or_else(
             || "All secrets".to_owned(),
             |id| format!("Secrets in {}", self.project_name(id)),
-        )
+        );
+        match list.marked.len() {
+            0 => title,
+            marked => format!("{title}, {marked} marked"),
+        }
     }
 
     fn render_projects(&self, selected: usize, area: Rect, buf: &mut Buffer) {
@@ -124,7 +132,13 @@ impl App {
                 .iter()
                 .map(|id| self.project_name(*id))
                 .collect();
+            let mark = if list.marked.contains(&item.id()) {
+                "* "
+            } else {
+                "  "
+            };
             ListItem::new(Line::from(vec![
+                Span::raw(mark).fg(Color::Yellow).bold(),
                 Span::raw(item.key().to_owned()),
                 Span::raw(format!("  {}", projects.join(", "))).dim(),
             ]))
@@ -328,8 +342,11 @@ impl App {
             Some(Screen::Secrets(list)) if list.filtering => {
                 "type to filter  Enter keep  Esc clear"
             }
+            Some(Screen::Secrets(list)) if !list.marked.is_empty() => {
+                "Space mark  d delete marked  Esc clear marks  / filter  ? keys"
+            }
             Some(Screen::Secrets(_)) => {
-                "Enter view  n new  e edit  d delete  / filter  w web vault  ? keys  Esc back"
+                "Enter view  Space mark  n new  e edit  d delete  / filter  ? keys  Esc back"
             }
             Some(Screen::Secret(_)) => {
                 "r reveal  c copy  e edit  d delete  w web vault  ? keys  Esc back"
@@ -363,7 +380,10 @@ impl App {
             Modal::Delete { target, typed } => ("Delete", self.delete_lines(target, typed)),
         };
         let height = u16::try_from(lines.len() + 2).unwrap_or(u16::MAX);
-        let popup = centered(area, 72, height);
+        // A line wider than the dialog wraps and pushes the last line out of it.
+        let widest = lines.iter().map(Line::width).max().unwrap_or(0);
+        let width = u16::try_from(widest + 2).unwrap_or(u16::MAX).max(72);
+        let popup = centered(area, width, height);
         Clear.render(popup, buf);
         Paragraph::new(lines)
             .block(panel(title))
@@ -380,6 +400,28 @@ impl App {
                 Line::default(),
                 Line::from("Type the secret key to confirm:"),
             ],
+            DeleteTarget::Secrets { secrets, count, .. } => {
+                let mut lines =
+                    vec![Line::from(format!("Delete {}?", secret_count(secrets.len()))).bold()];
+                let shown = secrets.len().min(MAX_KEYS_IN_DIALOG);
+                lines.extend(
+                    secrets[..shown]
+                        .iter()
+                        .map(|(_, key)| Line::from(format!("  {key}"))),
+                );
+                if secrets.len() > shown {
+                    lines.push(Line::from(format!("  and {} more", secrets.len() - shown)).dim());
+                }
+                lines.extend([
+                    Line::from(
+                        "The organization trash keeps what you delete. An admin can restore it at:",
+                    ),
+                    Line::from(self.trash_url()).fg(Color::Cyan),
+                    Line::default(),
+                    Line::from(format!("Type {count} to confirm:")),
+                ]);
+                lines
+            }
             DeleteTarget::Project { name, .. } => vec![
                 Line::from(format!("Delete project {name}?")).bold(),
                 Line::from("The project itself is deleted. Projects do not go to the trash."),
@@ -401,14 +443,15 @@ impl App {
 fn help_lines() -> Vec<Line<'static>> {
     [
         "Everywhere: ? keys, w web vault pages, q or Esc back or quit, Ctrl-C quit",
-        "Lists: Up/Down or k/j move",
+        "Lists: Up/Down or k/j move, g top, G bottom",
         "Projects: Enter open secrets, n new, e rename, d delete",
-        "Secrets: Enter view, n new, e edit, d delete, / filter by key",
+        "Secrets: Enter view, n new, e edit, d delete, / filter by key,",
+        "         Space mark or unmark, Esc clear marks, d delete the marked secrets",
         "Secret: r reveal or hide, c copy value (clipboard clears after 30 s), e edit, d delete",
         "Form: Enter types in the field, Enter or Esc stops typing, Tab next field,",
         "      Up/Down field, Left/Right project, r reveal, Ctrl-S save,",
         "      Enter on Project saves, Esc cancels",
-        "Delete: type the exact key or name, then Enter",
+        "Delete: type the exact key or name, or the count of marked secrets, then Enter",
         "",
         "Press any key to close",
     ]

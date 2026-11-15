@@ -10,6 +10,7 @@ use futures::{FutureExt, StreamExt};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::app::Listed;
+use crate::ui::Status;
 
 /// How often tick events fire. Ticks drive the clipboard countdown.
 const TICK_FPS: f64 = 4.0;
@@ -41,11 +42,12 @@ pub enum AppEvent {
         select: Option<Uuid>,
         done: Option<String>,
     },
-    /// A secret listing arrived for the given project, or for all projects.
+    /// A secret listing arrived for the given project, or for all projects. When it follows
+    /// a write, `done` is the status line.
     Secrets {
         project: Option<Uuid>,
         listed: Listed<Identifier>,
-        done: Option<String>,
+        done: Option<Status>,
     },
     /// One secret was read.
     Secret {
