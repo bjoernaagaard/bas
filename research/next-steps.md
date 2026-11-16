@@ -752,16 +752,27 @@ files were removed afterwards.
 | That UUID removed | Reply says `listed`, all visible | ready, exit 0 |
 | Empty policy | Reply says `not_needed` | ready, 0 checked |
 | Isolated broker with an API address that refuses connections | Reply says `failed` | warning, exit 2 |
+| A real policy approval lands while a slowed listing is in flight | Reply says `policy_changed` with the old policy hash | warning, hashes before and after differ, exit 2, and a rerun is ready |
+| The listing is slowed past the broker's 10 second deadline | Reply says `timed_out` | warning, exit 2 |
+| `gpg.ssh.defaultKeyCommand` set, with a signing key also set | `strace` saw no signing program start | warning, and the command's value is not printed |
+
+The approval in the policy change row was real. A software passkey from Chrome's virtual
+authenticator was enrolled in the isolated broker and approved a one-line policy change
+on its approval page. A local tunnel proxy delayed the broker's Secrets Manager traffic
+so that the listing took about four seconds.
 
 A stand-in socket server sent canned replies for the outcomes no real broker could be
-made to produce here. It proves only how the client reads them. `empty`, `timed_out`,
-`policy_changed`, an unknown outcome, a policy hash that changes between the two status
-reads, and a reply slower than 10 seconds each gave a warning. HTTP 403 on status gave
+made to produce here. It proves only how the client reads them. `empty`, an unknown
+outcome, a policy hash that changes between the two status reads, and a reply slower
+than 10 seconds each gave a warning. HTTP 403 on status gave
 failed with "authorization". An undecodable policy reply gave failed with "decoding".
 
+When the broker's listing and the client's wait both end at 10 seconds, the client can
+give up first. The result is still a warning, with the connection fix instead of the
+timeout wording.
+
 Still unverified: an empty listing from a real machine account with no visible secrets,
-a real policy approval during a lookup, the macOS and Windows builds, and physical
-YubiKey behavior, which stays the final manual step. Signing requests add normal broker
+and the Windows build. Signing requests add normal broker
 audit entries.
 
 Implementation references are [doctor.rs](../crates/bas/src/doctor.rs),

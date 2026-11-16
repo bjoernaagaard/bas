@@ -297,17 +297,14 @@ fn key_selection(
     let key_fix = "Set user.signingkey to the public key file of the broker's signing key, \
                    such as ~/.ssh/git_signing.pub, or to its key:: public key. The comment \
                    bas:git_signing is not a key.";
-    let Some(signing_key) = signing_key else {
-        if default_key_command.is_some() {
-            return Err(Unsupported::new(
-                "user.signingkey is not set, so Git would run gpg.ssh.defaultKeyCommand, which \
-                 the probe never runs because it could ask for input",
-            ));
-        }
+    if default_key_command.is_some() {
         return Err(Unsupported::new(
-            "neither user.signingkey nor gpg.ssh.defaultKeyCommand selects a signing key",
-        )
-        .fix(key_fix));
+            "gpg.ssh.defaultKeyCommand is set; the probe supports no key discovery command, \
+             because running one could ask for input",
+        ));
+    }
+    let Some(signing_key) = signing_key else {
+        return Err(Unsupported::new("user.signingkey selects no signing key").fix(key_fix));
     };
     let value = signing_key.value.as_str();
     // Git reads `key::` and a leading `ssh-` as a literal public key, and anything else as
