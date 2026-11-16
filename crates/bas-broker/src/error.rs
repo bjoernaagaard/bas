@@ -5,6 +5,7 @@ use std::fmt::{self, Display};
 pub struct Error {
     message: String,
     kind: ErrorKind,
+    http_status: Option<u16>,
 }
 
 /// What kind of failure a client call met.
@@ -13,6 +14,10 @@ pub struct Error {
 pub enum ErrorKind {
     /// The broker answered and refused the request, so nothing changed.
     Refused,
+    /// The socket could not be reached, or the connection broke before a whole reply.
+    Unreachable,
+    /// The broker sent a whole reply that this client could not read.
+    Unreadable,
     /// Anything else.
     Other,
 }
@@ -26,6 +31,15 @@ impl Error {
         Self {
             message: message.into(),
             kind,
+            http_status: None,
+        }
+    }
+
+    pub(crate) fn refused(message: impl Into<String>, http_status: u16) -> Self {
+        Self {
+            message: message.into(),
+            kind: ErrorKind::Refused,
+            http_status: Some(http_status),
         }
     }
 
@@ -33,6 +47,12 @@ impl Error {
     #[must_use]
     pub fn kind(&self) -> ErrorKind {
         self.kind
+    }
+
+    /// The HTTP status of a refusal, and `None` for every other kind.
+    #[must_use]
+    pub fn http_status(&self) -> Option<u16> {
+        self.http_status
     }
 }
 

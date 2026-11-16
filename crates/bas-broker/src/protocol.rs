@@ -188,6 +188,90 @@ impl ActivePolicy {
     }
 }
 
+/// Reply to `GET /v1/doctor/references`: whether the broker's machine account can see
+/// each reference of one policy snapshot. It holds identifiers and policy locations only.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PolicyReferences {
+    /// SHA-256 of the policy text whose references were checked, in lowercase hex.
+    pub policy_hash: String,
+    /// What the identifier listing established.
+    pub listing: Listing,
+}
+
+/// Outcome of the identifier listing. Visibility exists only under [`Listing::Listed`], so
+/// a failed or empty listing can never read as a list of missing references.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum Listing {
+    /// The policy names no reference, so the broker asked Secrets Manager nothing.
+    NotNeeded,
+    /// A nonempty listing completed for this snapshot.
+    Listed {
+        /// Each distinct reference with whether the listing held it.
+        references: Vec<CheckedReference>,
+    },
+    /// The listing succeeded with no identifiers, which the SDK cannot tell apart from a
+    /// reply that left the list out, so visibility is unknown.
+    Empty {
+        /// Each distinct reference of the snapshot.
+        references: Vec<PolicyReference>,
+    },
+    /// Secrets Manager refused the listing or could not be reached.
+    Failed {
+        /// Each distinct reference of the snapshot.
+        references: Vec<PolicyReference>,
+    },
+    /// The listing did not finish within the broker's deadline.
+    TimedOut {
+        /// Each distinct reference of the snapshot.
+        references: Vec<PolicyReference>,
+    },
+    /// The active policy changed while the listing ran, so the result is not current.
+    PolicyChanged {
+        /// Each distinct reference of the snapshot.
+        references: Vec<PolicyReference>,
+    },
+    /// An outcome that a newer broker sends and this client does not know.
+    #[serde(other)]
+    Unknown,
+}
+
+impl Listing {
+    /// The outcome as it appears on the wire, and `unknown` for one this client lacks.
+    #[must_use]
+    pub fn outcome(&self) -> &'static str {
+        match self {
+            Self::NotNeeded => "not_needed",
+            Self::Listed { .. } => "listed",
+            Self::Empty { .. } => "empty",
+            Self::Failed { .. } => "failed",
+            Self::TimedOut { .. } => "timed_out",
+            Self::PolicyChanged { .. } => "policy_changed",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// One distinct reference of the policy and every place that names it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyReference {
+    /// `bas://PROFILE/SECRET-ID`.
+    pub reference: String,
+    /// Policy keys that hold it, such as `secret.JINA_API_KEY.ref` or `github.private_key`.
+    pub locations: Vec<String>,
+}
+
+/// One distinct reference of the policy after a completed listing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckedReference {
+    /// `bas://PROFILE/SECRET-ID`.
+    pub reference: String,
+    /// Policy keys that hold it.
+    pub locations: Vec<String>,
+    /// Whether the listing held the secret ID.
+    pub visible: bool,
+}
+
 /// Reply to a request that waits for a passkey approval (HTTP 202).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Accepted {

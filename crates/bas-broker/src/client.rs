@@ -1,6 +1,6 @@
 //! The client side of the socket API, used by `bas run --with`, `bas get`, `bas add`, `bas rotate`,
-//! `bas policy edit`, `bas passkey`, `bas audit` on macOS, and `bas tui` in broker
-//! mode.
+//! `bas policy edit`, `bas passkey`, `bas audit` on macOS, `bas doctor --broker`, and `bas tui`
+//! in broker mode.
 
 use std::path::{Path, PathBuf};
 
@@ -14,7 +14,8 @@ use tokio::net::UnixStream;
 
 use crate::protocol::{
     Accepted, ActivePolicy, AddPasskey, AddSecret, ApprovalState, AuditEntries, DEFAULT_SOCKET,
-    HelperRequest, HelperValue, PasskeyList, PolicyProposal, Refusal, RunReply, RunRequest, Status,
+    HelperRequest, HelperValue, PasskeyList, PolicyProposal, PolicyReferences, Refusal, RunReply,
+    RunRequest, Status,
 };
 use crate::{Error, ErrorKind};
 
@@ -57,7 +58,7 @@ impl Client {
     pub async fn status(&self) -> Result<Status, Error> {
         match self.call::<(), _>(Method::GET, "/v1/status", None).await? {
             Outcome::Done(status) => Ok(status),
-            Outcome::Waiting(_) => Err(Error::new("the bas broker sent an unexpected reply")),
+            Outcome::Waiting(_) => Err(unexpected()),
         }
     }
 
@@ -78,7 +79,7 @@ impl Client {
         let path = format!("/v1/audit?{}", query.finish());
         match self.call::<(), _>(Method::GET, &path, None).await? {
             Outcome::Done(entries) => Ok(entries),
-            Outcome::Waiting(_) => Err(Error::new("the bas broker sent an unexpected reply")),
+            Outcome::Waiting(_) => Err(unexpected()),
         }
     }
 
@@ -86,7 +87,7 @@ impl Client {
     pub async fn run(&self, request: &RunRequest) -> Result<RunReply, Error> {
         match self.call(Method::POST, "/v1/run", Some(request)).await? {
             Outcome::Done(reply) => Ok(reply),
-            Outcome::Waiting(_) => Err(Error::new("the bas broker sent an unexpected reply")),
+            Outcome::Waiting(_) => Err(unexpected()),
         }
     }
 
@@ -94,7 +95,7 @@ impl Client {
     pub async fn helper(&self, request: &HelperRequest) -> Result<HelperValue, Error> {
         match self.call(Method::POST, "/v1/helper", Some(request)).await? {
             Outcome::Done(reply) => Ok(reply),
-            Outcome::Waiting(_) => Err(Error::new("the bas broker sent an unexpected reply")),
+            Outcome::Waiting(_) => Err(unexpected()),
         }
     }
 
@@ -117,7 +118,19 @@ impl Client {
     pub async fn policy(&self) -> Result<ActivePolicy, Error> {
         match self.call::<(), _>(Method::GET, "/v1/policy", None).await? {
             Outcome::Done(policy) => Ok(policy),
-            Outcome::Waiting(_) => Err(Error::new("the bas broker sent an unexpected reply")),
+            Outcome::Waiting(_) => Err(unexpected()),
+        }
+    }
+
+    /// Whether the broker's machine account can see each reference of the active policy.
+    /// The broker lists identifiers only and never reads a value for this.
+    pub async fn doctor_references(&self) -> Result<PolicyReferences, Error> {
+        match self
+            .call::<(), _>(Method::GET, "/v1/doctor/references", None)
+            .await?
+        {
+            Outcome::Done(references) => Ok(references),
+            Outcome::Waiting(_) => Err(unexpected()),
         }
     }
 
@@ -136,7 +149,7 @@ impl Client {
             .await?
         {
             Outcome::Done(list) => Ok(list),
-            Outcome::Waiting(_) => Err(Error::new("the bas broker sent an unexpected reply")),
+            Outcome::Waiting(_) => Err(unexpected()),
         }
     }
 
@@ -153,7 +166,7 @@ impl Client {
         let path = format!("/v1/approvals/{id}?wait={wait_seconds}");
         match self.call::<(), _>(Method::GET, &path, None).await? {
             Outcome::Done(state) => Ok(state),
-            Outcome::Waiting(_) => Err(Error::new("the bas broker sent an unexpected reply")),
+            Outcome::Waiting(_) => Err(unexpected()),
         }
     }
 
@@ -164,10 +177,13 @@ impl Client {
         body: Option<&B>,
     ) -> Result<Outcome<T>, Error> {
         let unreachable = |err: &dyn std::fmt::Display| {
-            Error::new(format!(
-                "could not reach the bas broker at {}: {err}",
-                self.socket.display()
-            ))
+            Error::with_kind(
+                format!(
+                    "could not reach the bas broker at {}: {err}",
+                    self.socket.display()
+                ),
+                ErrorKind::Unreachable,
+            )
         };
         let stream = UnixStream::connect(&self.socket)
             .await
@@ -199,7 +215,12 @@ impl Client {
             .await
             .map_err(|err| unreachable(&err))?
             .to_bytes();
-        let unreadable = || Error::new("the bas broker sent a reply bas could not read");
+        let unreadable = || {
+            Error::with_kind(
+                "the bas broker sent a reply bas could not read",
+                ErrorKind::Unreadable,
+            )
+        };
         match status {
             StatusCode::OK => serde_json::from_slice(&body)
                 .map(Outcome::Done)
@@ -214,12 +235,12 @@ impl Client {
 
 fn refused(status: StatusCode, body: &[u8]) -> Error {
     let Ok(refusal) = serde_json::from_slice::<Refusal>(body) else {
-        return Error::with_kind(
+        return Error::refused(
             format!(
                 "the bas broker refused the request (HTTP {})",
                 status.as_u16()
             ),
-            ErrorKind::Refused,
+            status.as_u16(),
         );
     };
     let mut message = if refusal.error == "denied" {
@@ -239,5 +260,12 @@ fn refused(status: StatusCode, body: &[u8]) -> Error {
     if let Some(line) = refusal.line {
         message.push_str(&format!(" (line {line})"));
     }
-    Error::with_kind(message, ErrorKind::Refused)
+    Error::refused(message, status.as_u16())
+}
+
+fn unexpected() -> Error {
+    Error::with_kind(
+        "the bas broker sent an unexpected reply",
+        ErrorKind::Unreadable,
+    )
 }

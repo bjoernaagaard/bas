@@ -478,6 +478,38 @@ impl Policy {
         self.tailscale.as_ref()
     }
 
+    /// Every distinct reference with each policy key that holds it, such as
+    /// `secret.NAME.ref` or `github.private_key`.
+    pub fn references(&self) -> BTreeMap<&SecretRef, Vec<String>> {
+        let mut located: BTreeMap<&SecretRef, Vec<String>> = BTreeMap::new();
+        let mut add = |reference, location: String| {
+            located.entry(reference).or_default().push(location);
+        };
+        for (name, secret) in &self.secrets {
+            add(&secret.reference, format!("secret.{name}.ref"));
+        }
+        for (name, reference) in &self.helpers {
+            add(reference, format!("helper.{name}.ref"));
+        }
+        for (name, key) in &self.ssh {
+            add(&key.reference, format!("ssh.{name}.ref"));
+        }
+        if let Some(github) = &self.github {
+            add(&github.private_key, "github.private_key".to_owned());
+            if let Some(user_token) = &github.user_token {
+                add(user_token, "github.user_token".to_owned());
+            }
+        }
+        if let Some(tailscale) = &self.tailscale {
+            add(&tailscale.client_id, "tailscale.client_id".to_owned());
+            add(
+                &tailscale.client_secret,
+                "tailscale.client_secret".to_owned(),
+            );
+        }
+        located
+    }
+
     /// What the proxy does for a lowercase host name, or `None` for a plain tunnel.
     pub fn route(&self, host: &str) -> Option<Route<'_>> {
         if let Some(github) = &self.github

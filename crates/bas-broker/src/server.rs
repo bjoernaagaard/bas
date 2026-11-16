@@ -2,6 +2,7 @@
 //! opens the socket API, the proxy, the ssh-agent, and the approval pages, and on Linux
 //! tells systemd it is ready.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,7 +18,7 @@ use axum::{Json, Router};
 use bas_core::Uuid;
 use bas_core::credential;
 use bas_core::reference::{EnvName, SecretRef};
-use bas_core::secrets::Session;
+use bas_core::secrets::{Identifier, Session};
 use serde::Deserialize;
 use similar::TextDiff;
 use tokio::net::UnixListener;
@@ -30,8 +31,9 @@ use crate::files::{bind_socket, file_error};
 use crate::passkeys::Passkeys;
 use crate::policy::{self, Policy};
 use crate::protocol::{
-    Accepted, ActivePolicy, AddPasskey, AddSecret, ApprovalLink, HelperRequest, HelperValue,
-    PasskeyList, PendingRequest, PolicyProposal, ProxyInfo, Refusal, RunReply, RunRequest, Status,
+    Accepted, ActivePolicy, AddPasskey, AddSecret, ApprovalLink, CheckedReference, HelperRequest,
+    HelperValue, Listing, PasskeyList, PendingRequest, PolicyProposal, PolicyReference,
+    PolicyReferences, ProxyInfo, Refusal, RunReply, RunRequest, Status,
 };
 use crate::state::{Broker, POLICY_FILE};
 use crate::{Error, pages, proxy, ssh_agent};
@@ -40,6 +42,9 @@ use crate::{Error, pages, proxy, ssh_agent};
 const USER_AGENT: &str = concat!("bas-broker/", env!("CARGO_PKG_VERSION"));
 /// Longest wait a client may ask for on `GET /v1/approvals/ID`.
 const MAX_WAIT: u64 = 300;
+/// Longest wait for the identifier listing of `GET /v1/doctor/references`, so a client
+/// that gives up never leaves an unbounded upstream request behind.
+const LISTING_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Where the broker reads its settings and writes its files. The defaults match the
 /// `bas-broker.service` unit on Linux and the `io.github.bjoernaagaard.bas.broker` LaunchDaemon on
@@ -119,6 +124,7 @@ async fn run(options: &Options) -> Result<(), Error> {
         .route("/v1/secrets", post(add_secret))
         .route("/v1/secrets/{name}/rotate", post(rotate))
         .route("/v1/policy", get(active_policy).post(propose_policy))
+        .route("/v1/doctor/references", get(doctor_references))
         .route("/v1/approvals/{id}", get(approval_state))
         .route("/v1/passkeys", get(list_passkeys).post(add_passkey));
     #[cfg(not(target_os = "linux"))]
@@ -464,6 +470,63 @@ async fn active_policy(State(broker): State<Arc<Broker>>, Allowed(_): Allowed) -
         entries: crate::summary::summarize(policy.text()).ok(),
     })
     .into_response()
+}
+
+/// `bas doctor --broker`: which references of one policy snapshot the machine account's
+/// identifier listing holds. It lists metadata only and never reads a value.
+async fn doctor_references(
+    State(broker): State<Arc<Broker>>,
+    Allowed(_): Allowed,
+) -> Json<PolicyReferences> {
+    let policy = broker.policy();
+    let located = policy.references();
+    let unchecked = || {
+        located
+            .iter()
+            .map(|(reference, locations)| PolicyReference {
+                reference: reference.to_string(),
+                locations: locations.clone(),
+            })
+            .collect()
+    };
+    let listing = if located.is_empty() {
+        Listing::NotNeeded
+    } else {
+        match tokio::time::timeout(LISTING_DEADLINE, broker.session.list_identifiers(None)).await {
+            Err(_) => Listing::TimedOut {
+                references: unchecked(),
+            },
+            Ok(Err(err)) => {
+                tracing::warn!("could not list secret identifiers for the doctor: {err}");
+                Listing::Failed {
+                    references: unchecked(),
+                }
+            }
+            Ok(Ok(identifiers)) if identifiers.is_empty() => Listing::Empty {
+                references: unchecked(),
+            },
+            Ok(Ok(_)) if broker.policy().hash() != policy.hash() => Listing::PolicyChanged {
+                references: unchecked(),
+            },
+            Ok(Ok(identifiers)) => {
+                let listed: BTreeSet<Uuid> = identifiers.iter().map(Identifier::id).collect();
+                Listing::Listed {
+                    references: located
+                        .iter()
+                        .map(|(reference, locations)| CheckedReference {
+                            reference: reference.to_string(),
+                            locations: locations.clone(),
+                            visible: listed.contains(&reference.id),
+                        })
+                        .collect(),
+                }
+            }
+        }
+    };
+    Json(PolicyReferences {
+        policy_hash: policy.hash().to_owned(),
+        listing,
+    })
 }
 
 /// `bas policy edit`: checks the text and opens an approval that shows the diff.

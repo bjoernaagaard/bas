@@ -86,6 +86,48 @@ Each entry has these fields. It names where values live, never a value.
 | `references` | The `bas://` references of the stored values. A label names each one when there are several. |
 | `details` | The entry's policy settings by their keys, as `bas policy show --json` prints them. |
 
+## GET /v1/doctor/references
+
+`bas doctor --broker` asks whether the broker's machine account can see each reference of
+the active policy. The broker lists secret identifiers only, and never reads a value for
+this. A broker without this endpoint answers 404.
+
+```json
+{
+  "policy_hash": "234a60d414c9...",
+  "listing": {
+    "outcome": "listed",
+    "references": [
+      {
+        "reference": "bas://home/<secret-id>",
+        "locations": ["secret.JINA_API_KEY.ref", "helper.JINA_API_KEY.ref"],
+        "visible": true
+      }
+    ]
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `policy_hash` | SHA-256 of the policy text whose references were checked. A client compares it with `policy_hash` from `GET /v1/status` before and after. |
+| `listing.outcome` | What the identifier listing established. See the next table. |
+| `listing.references` | Each distinct reference with every policy key that holds it. Only `listed` adds `visible`. `not_needed` has no list. |
+
+| `outcome` | Meaning |
+| --- | --- |
+| `listed` | A nonempty listing finished. `visible` says whether it held each reference. |
+| `empty` | The listing succeeded with no identifiers. The SDK cannot tell that from a reply without the list, so visibility is unknown. |
+| `failed` | Secrets Manager refused the listing or could not be reached. The broker logs the reason. |
+| `timed_out` | The listing did not finish within 10 seconds. |
+| `policy_changed` | The active policy changed while the listing ran. |
+| `not_needed` | The policy names no reference, so the broker asked Secrets Manager nothing. |
+
+A newer broker may send another `outcome`. A client reports it as unknown instead of
+refusing the reply. A reference missing from a `listed` result is not visible to the
+machine account. It may be deleted, or hidden by project access, and the two look the
+same.
+
 ## GET /v1/passkeys
 
 ```json
