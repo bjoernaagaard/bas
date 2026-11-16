@@ -534,8 +534,8 @@ bas mcp  (stdio, runs as the agent's user)
 
 ## A thorough bas doctor
 
-Status: investigated on homelab on 16 Nov 2026. The three checks below are specified,
-not implemented. Keep this increment to Git signing, client and broker compatibility,
+Status: implemented as `bas doctor --broker` and verified on homelab on 16 Nov 2026.
+The results are under "Verification results" below. Keep this increment to Git signing, client and broker compatibility,
 and policy references. Physical YubiKey verification is postponed until the operator
 is present, as the final manual step. It is not evidence required for the broker's
 software signing key.
@@ -722,11 +722,47 @@ the process-local overrides are removed.
 | Policy changes during lookup | Approve a policy change only in the isolated setup while a lookup runs | Associate results with their snapshot and refuse to report them as current readiness. |
 | Prompt exclusion | Inspect unsupported key selection before starting a subprocess | A warning appears without launching hardware interaction. Physical YubiKey checks remain the final manual step. |
 
-The positive and negative Git probes and current socket probes were run on homelab.
-Historical mixed-version reproduction, metadata endpoint behavior, server listing
-completeness, and physical YubiKey behavior remain unverified. The SDK's empty-list
-ambiguity was confirmed in its locked source. No secret value was
-retrieved for this investigation. Signing requests add normal broker audit entries.
+### Verification results, 16 Nov 2026
+
+Every row is a real run on homelab. The Git cases used process-local
+`GIT_CONFIG_COUNT` overrides in a disposable repository. The broker cases used a second
+broker started by hand on its own sockets and ports under `/tmp`, with a one-entry test
+policy and a machine token supplied for the run. The live broker, its policy, the Git
+settings, and every secret stayed unchanged. No secret value was read. The scratch
+files were removed afterwards.
+
+| Case | Independent command | `bas doctor --broker` |
+|---|---|---|
+| Effective Git settings | `git commit-tree -S` exit 0, `git verify-commit` exit 0 | `git signing` ready |
+| `user.signingkey=bas:git_signing` | Signing exit 1, could not load public key | failed at signing, exit 1 |
+| `gpg.ssh.allowedSignersFile=/dev/null` | Verify exit 1, no principal matched | failed at trust verification, exit 1 |
+| Overrides removed | Sign and verify exit 0 | ready again |
+| `gpg.ssh.program=/usr/bin/ssh-keygen` | Not signed, it is not the inspected shim | warning |
+| `sk-ssh-ed25519` key | `strace` saw only `git config` and `git rev-parse` start | warning before any signing program |
+| Key path or program is a FIFO | Not applicable | warning in under one second |
+| Trust file is a FIFO | Git blocks | warning after 10 seconds, no process left |
+| Outside a repository | `git rev-parse` fails | warning |
+| Live broker 0.8.7 | `curl /v1/status` 200, `bas policy show` 11 entries | compatibility ready, references warn on HTTP 404 |
+| `BAS_BROKER_SOCKET=/dev/null` | `bas policy show` connection refused | both broker checks warn, exit 2 |
+| Released 0.8.5 client, live 0.8.7 broker | `bas policy show` exit 1, unknown field `user_token` | The historical failure, reproduced |
+| Released 0.8.6 client, live 0.8.7 broker | `bas policy show` exit 0, 11 entries | Unequal versions decode |
+| This client, isolated released 0.8.6 broker | `curl /v1/status` says 0.8.6, references 404 | compatibility warns about drift, references warn, exit 2 |
+| Isolated broker, one real reference | `curl /v1/doctor/references` says `listed`, `visible: true` | all three ready, exit 0 |
+| A newly generated UUID added in two policy places | Reply says `visible: false` with both locations | failed, "not visible to the broker's machine account", exit 1 |
+| That UUID removed | Reply says `listed`, all visible | ready, exit 0 |
+| Empty policy | Reply says `not_needed` | ready, 0 checked |
+| Isolated broker with an API address that refuses connections | Reply says `failed` | warning, exit 2 |
+
+A stand-in socket server sent canned replies for the outcomes no real broker could be
+made to produce here. It proves only how the client reads them. `empty`, `timed_out`,
+`policy_changed`, an unknown outcome, a policy hash that changes between the two status
+reads, and a reply slower than 10 seconds each gave a warning. HTTP 403 on status gave
+failed with "authorization". An undecodable policy reply gave failed with "decoding".
+
+Still unverified: an empty listing from a real machine account with no visible secrets,
+a real policy approval during a lookup, the macOS and Windows builds, and physical
+YubiKey behavior, which stays the final manual step. Signing requests add normal broker
+audit entries.
 
 Implementation references are [doctor.rs](../crates/bas/src/doctor.rs),
 [protocol.rs](../crates/bas-broker/src/protocol.rs),

@@ -73,6 +73,17 @@ Machine tokens and Agent Access keys never go into the configuration directory.
 ```sh
 bas doctor
 bas doctor --profile default
+bas doctor --broker
 ```
+
+On a broker host, `--broker` runs three more checks. Each one prints the evidence it gathered under its line, and a `fix:` line when there is something to do. `bas doctor` never applies a fix.
+
+| Check | Ready means |
+|---|---|
+| `git signing` | A disposable commit was signed through the bas shim with this repository's Git settings, and `git verify-commit` trusts it. No ref, index, hook, or setting changes. |
+| `broker compatibility` | This client read the broker's status and displayed its policy. |
+| `policy references` | The broker's machine account can see every reference in the broker's policy. No value is read. |
+
+A check that cannot gather its evidence reports `warning`, for example when the broker is unreachable or the signing key needs a hardware touch. Then `bas doctor` exits 2. `--json` prints the same results as one JSON line.
 
 If a step fails, [First-run messages](../reference/first-run.md) lists every message `bas` can print before the first secret, what it most likely means, and the command to type next.

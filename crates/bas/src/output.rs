@@ -13,6 +13,8 @@ use crate::grant::{Grant, State};
 pub const EXIT_FAILURE: u8 = 1;
 /// Exit status for unusable command-line arguments.
 pub const EXIT_USAGE: u8 = 2;
+/// Exit status of `bas doctor` when a check warned and none failed.
+pub const EXIT_WARNING: u8 = 2;
 /// Exit status for a write the service accepted but `bas` could not verify.
 pub const EXIT_WRITTEN_UNVERIFIED: u8 = 3;
 /// Exit status for a write whose server-side result is unknown.
@@ -85,13 +87,19 @@ impl From<bas_core::Error> for Error {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// Outcome of one diagnostic line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Status {
     /// The component works.
+    #[serde(rename = "ready")]
     Ready,
     /// Setup is absent.
+    #[serde(rename = "not configured")]
     NotConfigured,
+    /// The evidence needed for a verdict could not be gathered.
+    #[serde(rename = "warning")]
+    Warning,
     /// The component was checked and does not work.
+    #[serde(rename = "failed")]
     Failed,
 }
 
@@ -100,20 +108,78 @@ impl Display for Status {
         f.pad(match self {
             Self::Ready => "ready",
             Self::NotConfigured => "not configured",
+            Self::Warning => "warning",
             Self::Failed => "failed",
         })
     }
 }
 
 /// One labelled diagnostic with a fixed or SDK-provided nonsecret detail.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Check {
     pub status: Status,
+    #[serde(rename = "name")]
     pub label: &'static str,
     pub detail: String,
+    /// Nonsecret facts behind the status, in the order they were gathered.
+    pub evidence: Vec<String>,
+    /// What the operator could do about this result. `bas` never applies it.
+    pub fix: Option<String>,
 }
 
-/// Writes one aligned line per check.
+impl Check {
+    /// A check with no evidence and no fix.
+    pub fn new(status: Status, label: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            status,
+            label,
+            detail: detail.into(),
+            evidence: Vec::new(),
+            fix: None,
+        }
+    }
+}
+
+/// The result of a whole diagnosis, which decides its exit status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Verdict {
+    /// No check failed or warned. Exit 0.
+    Ready,
+    /// Some check warned and none failed. Exit 2.
+    Warning,
+    /// Some check failed. Exit 1.
+    Failed,
+}
+
+impl Verdict {
+    pub fn of(checks: &[Check]) -> Self {
+        if checks.iter().any(|check| check.status == Status::Failed) {
+            Self::Failed
+        } else if checks.iter().any(|check| check.status == Status::Warning) {
+            Self::Warning
+        } else {
+            Self::Ready
+        }
+    }
+
+    pub fn exit_code(self) -> ExitCode {
+        ExitCode::from(match self {
+            Self::Ready => 0,
+            Self::Failed => EXIT_FAILURE,
+            Self::Warning => EXIT_WARNING,
+        })
+    }
+}
+
+/// JSON document printed by `bas doctor --json`.
+#[derive(Debug, Serialize)]
+pub struct DoctorReport<'a> {
+    pub status: Verdict,
+    pub checks: &'a [Check],
+}
+
+/// Writes one aligned line per check, with its evidence and fix indented beneath it.
 ///
 /// # Errors
 ///
@@ -124,13 +190,22 @@ pub fn write_checks(out: &mut impl Write, checks: &[Check]) -> io::Result<()> {
         .map(|check| check.label.len())
         .max()
         .unwrap_or(0);
+    let indent = " ".repeat(14 + 2 + width + 2);
     for Check {
         status,
         label,
         detail,
+        evidence,
+        fix,
     } in checks
     {
         writeln!(out, "{status:<14}  {label:<width$}  {detail}")?;
+        for fact in evidence {
+            writeln!(out, "{indent}{fact}")?;
+        }
+        if let Some(fix) = fix {
+            writeln!(out, "{indent}fix: {fix}")?;
+        }
     }
     Ok(())
 }

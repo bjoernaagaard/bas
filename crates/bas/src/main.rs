@@ -45,7 +45,9 @@ use crate::cli::{
 use crate::grant::{Change, Grant, Policy};
 use crate::helper::Helpers;
 use crate::input::InputSource;
-use crate::output::{EXIT_USAGE, Error, FindReport, GrantReport, Receipt, Result, Status};
+use crate::output::{
+    DoctorReport, EXIT_USAGE, Error, FindReport, GrantReport, Receipt, Result, Verdict,
+};
 use crate::template::Overwrite;
 
 /// User agent sent with every Secrets Manager request.
@@ -776,10 +778,24 @@ fn doctor(args: DoctorArgs) -> Result<ExitCode> {
         let profile = Profiles::load()?.get(&name)?;
         checks.push(runtime()?.block_on(doctor::authenticated(&profile)));
     }
-    output::write_checks(&mut io::stdout().lock(), &checks).map_err(stdout_failed)?;
-    if checks.iter().any(|check| check.status == Status::Failed) {
-        Ok(ExitCode::FAILURE)
-    } else {
-        Ok(ExitCode::SUCCESS)
+    #[cfg(unix)]
+    if args.broker {
+        checks.push(doctor::git_signing());
+        checks.extend(runtime()?.block_on(doctor::broker()));
     }
+    let verdict = Verdict::of(&checks);
+    let mut out = io::stdout().lock();
+    if args.json {
+        output::write_json(
+            &mut out,
+            &DoctorReport {
+                status: verdict,
+                checks: &checks,
+            },
+        )
+    } else {
+        output::write_checks(&mut out, &checks)
+    }
+    .map_err(stdout_failed)?;
+    Ok(verdict.exit_code())
 }

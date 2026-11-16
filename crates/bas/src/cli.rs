@@ -84,7 +84,10 @@ pub enum Command {
     ///
     /// Input and receipts work as for create.
     Update(UpdateArgs),
-    /// Report readiness. Offline unless --profile is given.
+    /// Report readiness. Offline unless --profile or --broker is given.
+    ///
+    /// Exits 1 when a check failed, 2 when a check warned and none failed, and 0 otherwise.
+    /// A warning means the evidence for a verdict could not be gathered.
     Doctor(DoctorArgs),
     /// Serve paired remote devices through Agent Access until interrupted.
     ///
@@ -633,4 +636,14 @@ pub struct DoctorArgs {
     /// Also authenticate this profile and confirm its organization.
     #[arg(long)]
     pub profile: Option<String>,
+    /// Also sign and verify a disposable commit with this repository's Git settings, read
+    /// the broker's status and policy, and check that the broker's machine account can see
+    /// every reference of its policy. Uses the broker at BAS_BROKER_SOCKET or the default
+    /// socket. Changes no ref, setting, or secret, and reads no secret value.
+    #[cfg(unix)]
+    #[arg(long)]
+    pub broker: bool,
+    /// Print {"status","checks":[{"name","status","detail","evidence","fix"}]} instead of text.
+    #[arg(long)]
+    pub json: bool,
 }
