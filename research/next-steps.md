@@ -762,8 +762,7 @@ on its approval page. A local tunnel proxy delayed the broker's Secrets Manager 
 so that the listing took about four seconds.
 
 A stand-in socket server sent canned replies for the outcomes no real broker could be
-made to produce here. It proves only how the client reads them. `empty`, an unknown
-outcome, a policy hash that changes between the two status reads, and a reply slower
+made to produce here. It proves only how the client reads them. An unknown outcome, a policy hash that changes between the two status reads, and a reply slower
 than 10 seconds each gave a warning. HTTP 403 on status gave
 failed with "authorization". An undecodable policy reply gave failed with "decoding".
 
@@ -776,13 +775,18 @@ On the mini (macOS 27.2.1) the same commit built, and `bas doctor --broker` repo
 `user.signingkey` set for one process to the `sk-ssh-ed25519` public key file, it warned
 in under a second and asked for no touch.
 
-The physical YubiKey signature did not run. Homebrew's `ssh-keygen -Y sign` from OpenSSH
-10.6p2 asked for presence and then answered "device not found" for both hardware keys,
-and the mini's IO registry listed no FIDO HID device at that time.
+The physical YubiKey signature ran on the mini as the last step. Homebrew's
+`ssh-keygen -Y sign` from OpenSSH 10.6p2 signed a harmless file with the `home`
+`sk-ssh-ed25519` key after the FIDO PIN and one touch. `-Y verify` accepted it and
+rejected a changed message. The signature's flags were `0x05`, presence and
+verification, with counter 505. A first attempt answered "device not found" until the
+key was plugged in again.
 
-Still unverified: an empty listing from a real machine account with no visible secrets,
-a real YubiKey signature, and the Windows build. Signing requests add normal broker
-audit entries.
+An isolated broker with a new machine account that has no project access returned
+`empty` for a one-entry policy. The doctor warned that the visibility of 1 reference is
+unknown and exited 2. It did not call the reference missing.
+
+Still unverified: the Windows build.
 
 Implementation references are [doctor.rs](../crates/bas/src/doctor.rs),
 [protocol.rs](../crates/bas-broker/src/protocol.rs),
