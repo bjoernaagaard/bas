@@ -1,10 +1,10 @@
 # Find and use secrets
 
-An agent finds a secret by its key, gets a reference back, and passes the reference to `bas run`. The value never appears in the agent's commands or in its transcript.
+Find a secret's reference with `bas find`, and pass the reference to `bas run`, so the value never appears in the agent's commands or in its transcript.
 
 ## Find a reference
 
-`bas find` lists the secrets whose key contains a fragment you give, and it prints each one's reference. It never prints values or notes.
+Run `bas find` with a fragment of the key, and it prints the reference of each secret whose key contains the fragment. It never prints values or notes.
 
 ```sh
 bas find --profile work API
@@ -16,11 +16,11 @@ $ bas find --profile work --json API
 {"matches":[{"reference":"bas://work/<secret-id>","key":"API_TOKEN","project_ids":["<project-id>"],"matched":["API"],"duplicate_key":false}],"unmatched":[]}
 ```
 
-The search ignores case. Without a fragment, `bas find` lists every secret the machine account can read. A fragment that matches nothing appears under `unmatched`.
+The search ignores case. Without a fragment, `bas find` lists every secret the machine account can read, and a fragment that matches nothing appears under `unmatched`.
 
 ## Run a program with secrets
 
-`bas run` reads every referenced secret, puts each value in the variable you name, and starts the program. If any reference fails, the program doesn't start.
+Bind each reference to a variable name with `--env`, and `bas run` starts the program with the values in those variables.
 
 ```sh
 bas run --env "API_TOKEN=bas://work/<secret-id>" -- your-command --flag
@@ -41,23 +41,36 @@ sequenceDiagram
     bas-->>Agent: output with each value replaced by [bas:NAME]
 ```
 
-`bas run` follows the rules below:
+`bas run` follows the steps below, and it stops before the program starts when a step fails.
 
-- It passes the arguments after `--` straight to the program, without a shell.
-- It removes `BWS_ACCESS_TOKEN` and `AAC_TOKEN` from the program's environment. The program inherits every other variable in your environment.
-- It replaces each injected value of 4 or more bytes with `[bas:NAME]` in the program's stdout and stderr.
-- Before the program starts, it appends one JSON line per binding to `audit.log`. A line holds the time, the variable name, the reference, the program name, the working directory, and the process ID, and never a value. If `bas` can't write the line, the program doesn't start.
+```text
+bas run --env NAME=REFERENCE -- program args
+  read every referenced secret              any failure: the program doesn't start
+  append one JSON line per binding to audit.log
+    the line holds the time, the variable name, the reference,
+    the program name, the working directory, and the process ID, never a value
+    write fails: the program doesn't start
+  build the environment
+    remove BWS_ACCESS_TOKEN and AAC_TOKEN
+    keep every other variable of your environment
+  start the program with the arguments after --, without a shell
+  replace each injected value of 4 or more bytes with [bas:NAME] in stdout and stderr
+```
+
+`bas` writes `audit.log` in `BAS_STATE_DIR`, or in the user state directory when the variable isn't set.
 
 ```text
 $ bas run --env "API_TOKEN=bas://work/<secret-id>" -- sh -c 'echo "$API_TOKEN"'
 [bas:API_TOKEN]
 ```
 
-Masking guards against accidents in a transcript, and it doesn't sandbox the program. The program can still write a value to a file, send it over the network, or print it in another encoding, such as base64. Pick the program with care. To keep values away from an agent on purpose, use [the broker](../broker/overview.md).
+Masking guards against accidents in a transcript, and it doesn't sandbox the program. The program can still write a value to a file, send it over the network, or print it in another encoding, e.g., base64, so pick the program with care. To keep values away from an agent on purpose, use [the broker](../broker/overview.md).
 
 ## Give one secret to a credential helper
 
-Some tools run a command and read one secret from its stdout, such as pi's `"!cmd"` keys in `auth.json`, git credential helpers, and `apiKeyHelper`. `bas run` masks stdout, so it can't serve them. `bas get` prints the raw value with no trailing newline, but only for a reference you allowed.
+Allow a reference with `bas helper allow`, and `bas get` prints its raw value for a tool that reads one secret from a command's stdout.
+
+Such tools include pi's `"!cmd"` keys in `auth.json`, git credential helpers, and `apiKeyHelper`. `bas run` masks stdout, so it can't serve them. `bas get` prints the value with no trailing newline.
 
 ```sh
 bas helper allow bas://work/<secret-id>   # asks you to type a one-time code
@@ -69,18 +82,36 @@ bas helper revoke bas://work/<secret-id>
 "managementKey": "!bas get bas://work/<secret-id>"
 ```
 
-`bas get` follows the rules below:
+`bas get` decides as the pseudocode shows.
 
-- It refuses a reference that isn't on the list, and other references stay masked as before.
-- It refuses when stdout is a terminal, so the value never shows on screen.
-- Before it prints, it appends one JSON line to `audit.log` with the reference, the parent process, and the working directory, and never the value. If `bas` can't write the line, it prints nothing.
-- A reference of a remote profile still needs approval or a grant on the listener.
+```text
+on(bas get REFERENCE)
+  if stdout is a terminal
+    refuse, so the value never shows on screen
+  if this machine has a bas broker
+    ask the broker, which answers only for a [helper.NAME] entry of its policy
+  else if REFERENCE isn't on the helper list
+    refuse                               bas run keeps other references masked
+  if REFERENCE belongs to a remote profile
+    it still needs approval or a grant on the listener
+  append one JSON line to audit.log with the reference, the parent process,
+    and the working directory, never the value
+    write fails: print nothing
+  print the value
+```
 
-On a machine with a [bas broker](../broker/overview.md), the broker holds the machine token, so `bas get` asks the broker instead, and the broker answers only for references in a [`[helper.NAME]`](../broker/policy.md#helpername) entry of its policy. Add the entry with `bas policy edit`, which your passkey approves. There, `bas helper list` lists those entries, and `bas helper allow` and `bas helper revoke` refuse, because the local list has no effect.
+On a machine with a [bas broker](../broker/overview.md), the broker holds the machine token, so the list that `bas helper allow` keeps has no effect there.
+
+| Command | Without a broker | With a broker |
+|---|---|---|
+| `bas get` | Reads the value for a reference on the local list | Asks the broker, which answers only for references in a [`[helper.NAME]`](../broker/policy.md#helpername) entry |
+| `bas helper list` | Lists the local list | Lists the `[helper.NAME]` entries |
+| `bas helper allow`, `bas helper revoke` | Change the local list | Refuse |
+| Add a reference | `bas helper allow` | `bas policy edit`, which your passkey approves |
 
 ## Keep bindings in a template
 
-A reference template is a file of `NAME=bas://profile/id` lines. `bas env run` reads a template and then follows the same rules as `bas run`.
+Write your bindings to a reference template with `bas env write`, and run a program with them with `bas env run`, which follows the same rules as `bas run`.
 
 ```sh
 bas env write .env.refs --env "API_TOKEN=bas://work/<secret-id>" --env "DB_URL=bas://work/<secret-id>"
@@ -93,4 +124,6 @@ API_TOKEN=bas://work/<secret-id>
 DB_URL=bas://work/<secret-id>
 ```
 
-A template holds bindings, comments, and blank lines only. It can't hold plain text values, shell commands, or substitutions, and `bas` expands nothing in it. `bas env write` refuses to replace an existing file unless you add `--force`. A template holds no secret, but before you commit one, decide whether you want its secret IDs in version control.
+A template holds `NAME=bas://profile/id` bindings, comments, and blank lines only. It can't hold plain text values, shell commands, or substitutions, and `bas` expands nothing in it. `bas env write` refuses to replace an existing file unless you add `--force`.
+
+A template holds no secret, but before you commit one, decide whether you want its secret IDs in version control.

@@ -1,6 +1,6 @@
 # Create and update secrets
 
-`bas create` and `bas update` write a secret value that they read from the clipboard or from piped stdin. They never accept a value as an argument, and they refuse stdin from a terminal, because typed text would show on the screen.
+Pipe a value or copy it to the clipboard, and `bas create` or `bas update` writes it to Secrets Manager and prints a JSON receipt that says whether the write was verified.
 
 ```sh
 bas create --profile work --key API_TOKEN --project <project-id> --clipboard
@@ -8,11 +8,18 @@ bas update bas://work/<secret-id> --clipboard
 some-tool print-token | bas update bas://work/<secret-id> --stdin
 ```
 
+| Input | Accepted |
+|---|---|
+| `--clipboard` | Yes |
+| `--stdin` from a pipe | Yes |
+| `--stdin` from a terminal | No, because typed text would show on the screen |
+| A value as an argument | No |
+
 `bas` keeps the input bytes as they are, including any line endings at the end.
 
 ## What an update keeps
 
-An update replaces the value and keeps the key, the note, and the project of the secret. The Bitwarden SDK replaces the whole secret without checking for changes made by someone else in the meantime, so an update can overwrite another person's change. `bas` refuses an update when the key or the note starts or ends with whitespace, because the SDK would trim it. Update such a secret in the web vault instead.
+An update replaces the value and keeps the key, the note, and the project of the secret.
 
 ```diff
  secret <secret-id>
@@ -23,9 +30,11 @@ An update replaces the value and keeps the key, the note, and the project of the
 +  value    new value
 ```
 
+The Bitwarden SDK replaces the whole secret without checking for changes made by someone else in the meantime, so an update can overwrite another person's change. `bas` refuses an update when the key or the note starts or ends with whitespace, because the SDK would trim it. Update such a secret in the web vault instead.
+
 ## Receipts and verification
 
-After a write, `bas` reads the secret back from Secrets Manager and prints a JSON receipt. The receipt holds metadata and the reference, and never the value. Its `outcome` field says what `bas` could confirm, and the exit code says the same.
+Read the receipt's `outcome` field or the exit code to learn what `bas` could confirm about the write. After a write, `bas` reads the secret back from Secrets Manager, and the receipt holds metadata and the reference, and never the value.
 
 ```mermaid
 flowchart TD
@@ -37,11 +46,23 @@ flowchart TD
     B -->|no or failed| N[outcome written_unverified, exit 3]
 ```
 
-Don't retry a create or an update automatically when the outcome is unclear. Check the secret in the web vault first. `bas` has no command that deletes a secret, and the terminal UI (`bas tui`) can delete one after you type its key. To delete several at once, mark each with Space in the secrets list, press `d`, and type how many you marked.
+Don't retry a create or an update automatically when the outcome is unclear, and check the secret in the web vault first. `bas` never retries a write by itself.
+
+## Delete a secret
+
+Delete a secret in the terminal UI, `bas tui`, because `bas` has no command that deletes one.
+
+```text
+bas tui
+  delete one secret      type its key to confirm
+  delete several         mark each with Space in the secrets list
+                         press d
+                         type how many you marked
+```
 
 ## Exit codes
 
-Every `bas` command uses the same exit codes. `bas run` and `bas env run` pass on the exit status of the program they started.
+Every `bas` command uses the exit codes below, and `bas run` and `bas env run` pass on the exit status of the program they started.
 
 ```text
 exit code of bas

@@ -2,13 +2,21 @@
 
 # Bitwarden Agent Secrets
 
-`bas` lets coding agents use secrets from Bitwarden Secrets Manager without seeing the values. An agent names a secret, and `bas` adds the value where it's needed, so the value stays out of the agent's commands, output, and transcript. The full documentation is at <https://bjoernaagaard.github.io/bas/>.
+Install `bas` with `mise use -g github:bjoernaagaard/bas`, and your coding agents can use secrets from Bitwarden Secrets Manager without seeing the values.
 
-`bas` isn't ready for production use yet. The source is under the MIT license.
+`bas` is for a person who runs coding agents, e.g., Claude Code or Codex, on their own machines and keeps API keys, SSH keys, and service tokens in Bitwarden Secrets Manager. An agent names a secret, and `bas` adds the value where it's needed, so the value stays out of the agent's commands, output, and transcript.
+
+```sh
+mise use -g github:bjoernaagaard/bas     # or download an archive from the releases page
+bas --version
+bas auth login                           # paste a machine account token when it asks
+```
+
+`bas` isn't ready for production use yet. The source is under the MIT license, and the full documentation is at <https://bjoernaagaard.github.io/bas/>.
 
 ## Choose a setup
 
-You can use `bas` in two ways, and the broker is the safer one because programs never get a raw value.
+Install the broker when the machine can run it, because programs then never get a raw value, and use direct access everywhere else.
 
 ```text
 on(choose setup)
@@ -17,6 +25,8 @@ on(choose setup)
   else
     use direct access                       the program gets the value in its environment
 ```
+
+With the broker, the program sends its request without the key, and the broker adds the key on the way to the API host.
 
 ```mermaid
 sequenceDiagram
@@ -36,7 +46,7 @@ sequenceDiagram
 
 ## Quick start for agents
 
-An agent needs two things on the machine, which are the `bas` program and the agent skill that tells it how to use `bas`.
+Give the agent the `bas` program and the agent skill that tells it how to use `bas`, and then let it list what it may use.
 
 First, install `bas`. With mise, run the command below. Without mise, download the archive for your platform from the [releases page](https://github.com/bjoernaagaard/bas/releases) and put `bas` on your `PATH`.
 
@@ -64,7 +74,7 @@ on(agent starts work)
 
 ## What an agent runs
 
-On a broker machine, the agent uses each kind of policy entry in the way the table shows. `bas policy show` prints the exact command for every entry.
+On a broker machine, the agent uses each kind of policy entry in the way the table shows, and `bas policy show` prints the exact command for every entry.
 
 | Policy entry | What the agent runs | What happens |
 |---|---|---|
@@ -84,7 +94,9 @@ bas run --env "API_TOKEN=bas://default/<secret-id>" -- your-command
 
 ## Set up the broker on Linux
 
-The broker runs as a separate system user, and it keeps the machine account token and every secret away from your own user. You need a Secrets Manager machine account and its access token, systemd, and an HTTPS address for the approval pages, e.g., Tailscale Serve.
+Run the five steps below to start the broker as a separate system user, which keeps the machine account token and every secret away from your own user.
+
+You need a Secrets Manager machine account and its access token, systemd, and an HTTPS address for the approval pages, e.g., Tailscale Serve.
 
 First, install the program, the `bas` user, and the sealed token. Run the commands from the extracted release archive, which includes `contrib/`.
 
@@ -106,7 +118,7 @@ sudoedit /etc/bas/broker.toml                     # set the profile, project, an
 sudo systemctl daemon-reload && sudo systemctl enable --now bas-broker
 ```
 
-Third, publish the approval pages over HTTPS and enroll a passkey, such as a YubiKey. Open the enrollment link in a browser on a device that can use the passkey.
+Third, publish the approval pages over HTTPS and enroll a passkey, e.g., a YubiKey. Open the enrollment link in a browser on a device that can use the passkey.
 
 ```sh
 sudo tailscale serve --service=svc:bas --https=443 127.0.0.1:793
@@ -131,7 +143,7 @@ sudo git config --system gpg.ssh.program /usr/local/lib/bas/shims/ssh-keygen
 export PATH="/usr/local/lib/bas/shims:$PATH"      # or put it in your shell or mise config
 ```
 
-The broker setup leaves these files on the machine:
+The broker setup leaves the files below on the machine.
 
 ```text
 /usr/local/bin/bas                            the program
@@ -148,7 +160,7 @@ On macOS, a LaunchDaemon runs the broker as the `_bas` account, with the files f
 
 ## Check that it works
 
-Run these commands after the setup, and use the name of any API key entry from your policy.
+Run the commands below after the setup, with the name of any API key entry from your policy.
 
 ```sh
 bas policy show                                   # lists every entry, without values
@@ -160,7 +172,7 @@ bas tui                                           # browse the policy and pendin
 
 ## Change what agents may use
 
-Every change to the broker needs an approval with an enrolled passkey. The broker waits for approval and applies the change after you approve it.
+Approve every change to the broker with an enrolled passkey, because the broker waits for that approval and applies the change only after it.
 
 ```mermaid
 sequenceDiagram
@@ -186,7 +198,7 @@ sequenceDiagram
 
 ## Connect an MCP client
 
-On Linux and macOS, `bas mcp` serves the broker to an MCP client over stdin and stdout. Add it to the client's configuration as a stdio server.
+Add `bas mcp` to an MCP client's configuration as a stdio server, and the client can read the broker's policy and pending approvals over stdin and stdout on Linux and macOS.
 
 ```json
 { "mcpServers": { "bas": { "command": "bas", "args": ["mcp"] } } }
@@ -200,13 +212,37 @@ The server has three read-only tools, and none of them returns a secret value or
 | `broker_status` | The broker version, the policy hash, and the requests that wait for approval |
 | `approve_pending` | The state of one approval, given its `id`, after waiting up to `wait_seconds` (0 to 25) |
 
-The server speaks [MCP 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25). For a pending request, it returns a URL elicitation error when the client declares support. Any other client gets the link as text in the tool result. A person still approves with a passkey on that page. Cancelling a call only stops the wait, and the request stays as it is. Retrying reads the same request again.
+The server speaks [MCP 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25), and a person always approves on the approval page with a passkey.
 
-Approval states are `pending`, `approved`, `denied`, `expired`, and `failed`. `approved` means the broker applied the change. `failed` means a passkey approved it, but the broker could not apply it. The tool returns no approval result payload or error details. An unknown request or a refused lookup returns a tool error.
+```text
+on(approve_pending finds a pending request)
+  if the client declares support for URL elicitation
+    return a URL elicitation error with the approval link
+  else
+    return the link as text in the tool result
+on(the client cancels the call)
+  stop the wait, and leave the request as it is
+on(the client retries the call)
+  read the same request again
+on(an unknown request, or a refused lookup)
+  return a tool error
+```
+
+| Approval state | Meaning |
+|---|---|
+| `pending` | The request still waits for a passkey |
+| `approved` | The broker applied the change |
+| `denied` | Someone denied it on the approval page |
+| `expired` | Nobody approved it within 15 minutes |
+| `failed` | A passkey approved it, but the broker couldn't apply it |
+
+The tool returns no approval result payload and no error details.
 
 The server runs as the user who starts it, so the broker allows it only when that uid is in `broker.toml`. It uses `BAS_BROKER_SOCKET` like the other commands, and it stops when stdin closes.
 
 ## Documentation
+
+Read the full guides at <https://bjoernaagaard.github.io/bas/>, starting from the page in the table that matches your task.
 
 | Page | What it covers |
 |---|---|
