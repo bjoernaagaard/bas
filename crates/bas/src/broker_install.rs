@@ -69,14 +69,14 @@ struct Step {
 }
 
 /// Prints the plan, and applies it unless `--dry-run` is given.
-pub fn install(args: BrokerInstallArgs) -> Result<ExitCode> {
+pub fn install(args: &BrokerInstallArgs) -> Result<ExitCode> {
     if !Path::new("/run/systemd/system").exists() {
         return Err(Error::new(
             "bas broker install needs a machine that systemd started",
         ));
     }
     let root = rustix::process::geteuid().is_root();
-    let steps = plan(&args, root)?;
+    let steps = plan(args, root)?;
     for step in &steps {
         let (word, note) = match &step.state {
             State::Ready => ("ready", String::new()),

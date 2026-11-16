@@ -327,7 +327,7 @@ pub enum BrokerCommand {
     /// /etc/bas/broker.toml, starts bas-broker.service, and installs the gh and ssh-keygen
     /// shims, the ssh config, and the system Git signing program. It prints its plan
     /// first, changes only what differs, and keeps an existing token and broker.toml.
-    Install(BrokerInstallArgs),
+    Install(Box<BrokerInstallArgs>),
 }
 
 #[cfg(unix)]

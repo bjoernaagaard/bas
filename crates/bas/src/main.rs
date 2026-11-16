@@ -161,13 +161,12 @@ fn dispatch(command: Command) -> Result<ExitCode> {
             agent_access::pair(name, relay)
         }
         Command::Tui(args) => tui(&args),
-        #[cfg(unix)]
         #[cfg(target_os = "linux")]
         Command::Broker(cli::BrokerArgs {
             command: Some(cli::BrokerCommand::Install(args)),
             ..
-        }) => broker_install::install(args),
-        #[cfg(not(target_os = "linux"))]
+        }) => broker_install::install(&args),
+        #[cfg(all(unix, not(target_os = "linux")))]
         Command::Broker(cli::BrokerArgs {
             command: Some(cli::BrokerCommand::Install(_)),
             ..
