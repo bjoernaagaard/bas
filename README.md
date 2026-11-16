@@ -184,6 +184,28 @@ sequenceDiagram
 | List the passkeys that can approve | `bas passkey list` |
 | Replace every passkey with new ones | `bas passkey add --replace` |
 
+## Connect an MCP client
+
+On Linux and macOS, `bas mcp` serves the broker to an MCP client over stdin and stdout. Add it to the client's configuration as a stdio server.
+
+```json
+{ "mcpServers": { "bas": { "command": "bas", "args": ["mcp"] } } }
+```
+
+The server has three read-only tools, and none of them returns a secret value or can approve, deny, or change a request.
+
+| Tool | What it returns |
+|---|---|
+| `policy_entries` | The policy hash, and each entry's kind, name, rules, and command, without raw policy text or header templates |
+| `broker_status` | The broker version, the policy hash, and the requests that wait for approval |
+| `approve_pending` | The state of one approval, given its `id`, after waiting up to `wait_seconds` (0 to 25) |
+
+The server speaks [MCP 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25). For a pending request, it returns a URL elicitation error when the client declares support. Any other client gets the link as text in the tool result. A person still approves with a passkey on that page. Cancelling a call only stops the wait, and the request stays as it is. Retrying reads the same request again.
+
+Approval states are `pending`, `approved`, `denied`, `expired`, and `failed`. `approved` means the broker applied the change. `failed` means a passkey approved it, but the broker could not apply it. The tool returns no approval result payload or error details. An unknown request or a refused lookup returns a tool error.
+
+The server runs as the user who starts it, so the broker allows it only when that uid is in `broker.toml`. It uses `BAS_BROKER_SOCKET` like the other commands, and it stops when stdin closes.
+
 ## Documentation
 
 | Page | What it covers |

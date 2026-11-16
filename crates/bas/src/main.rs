@@ -13,6 +13,8 @@ mod grant;
 mod helper;
 mod input;
 mod mask;
+#[cfg(unix)]
+mod mcp;
 mod output;
 mod private_toml;
 mod save;
@@ -187,6 +189,8 @@ fn dispatch(command: Command) -> Result<ExitCode> {
         Command::Passkey(cli::PasskeyCommand::List(args)) => {
             broker_commands::passkey_list(args.json)
         }
+        #[cfg(unix)]
+        Command::Mcp => mcp::serve(),
         Command::Grant(GrantCommand::Add(args)) => grant_add(args),
         Command::Grant(GrantCommand::List(args)) => grant_list(&args),
         Command::Grant(GrantCommand::Revoke(args)) => {

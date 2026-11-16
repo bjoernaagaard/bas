@@ -34,7 +34,7 @@ pub enum Command {
     /// from its paired listener, and each needs approval or an exact grant there; a remote
     /// failure never falls back to a machine token. Arguments after -- reach the program
     /// unchanged, without a shell. BWS_ACCESS_TOKEN and AAC_TOKEN are removed from its
-    /// environment. Each injected value of 4 or more bytes is replaced with [bas:NAME] in the
+    /// environment. Each injected value of 4 or more bytes is replaced with `[bas:NAME]` in the
     /// program's stdout and stderr. Masking isn't a sandbox, because the program can still
     /// write a value to a file or send it elsewhere. Before the program starts, bas appends
     /// one JSON line per binding to audit.log in BAS_STATE_DIR or the user state directory,
@@ -166,6 +166,17 @@ pub enum Command {
     #[cfg(unix)]
     #[command(subcommand)]
     Passkey(PasskeyCommand),
+    /// Serve the bas broker to an MCP client over stdin and stdout.
+    ///
+    /// Speaks the Model Context Protocol 2025-11-25 with three read-only tools:
+    /// policy_entries lists policy summaries without secret values or header templates,
+    /// broker_status lists pending approvals, and approve_pending reports one approval and
+    /// its link. No tool can approve, deny, or change a request, and none returns a secret.
+    /// A person approves each request with a passkey on the approval page. The server runs
+    /// as the user who starts it and talks to the broker at BAS_BROKER_SOCKET, or the
+    /// default socket. It stops when stdin closes.
+    #[cfg(unix)]
+    Mcp,
 }
 
 #[cfg(unix)]
