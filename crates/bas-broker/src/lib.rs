@@ -34,6 +34,16 @@ mod summary;
 pub use error::{Error, ErrorKind};
 pub use server::{Options, serve};
 
+/// Checks the text of a `broker.toml` that is about to be written to `path`, with the
+/// rules the broker applies when it starts.
+///
+/// # Errors
+///
+/// Fails when a key is missing, unknown, or holds a value the broker refuses.
+pub fn check_config(text: &str, path: &std::path::Path) -> Result<(), Error> {
+    config::Config::parse(text, path).map(|_| ())
+}
+
 /// Makes ring the process-wide rustls crypto provider.
 ///
 /// hudsucker turns on rustls's aws-lc-rs provider next to the ring provider the rest of

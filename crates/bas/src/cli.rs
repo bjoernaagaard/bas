@@ -289,7 +289,10 @@ pub struct AuditArgs {
 
 #[cfg(unix)]
 #[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
 pub struct BrokerArgs {
+    #[command(subcommand)]
+    pub command: Option<BrokerCommand>,
     /// Unix socket for the API.
     #[arg(long, value_name = "PATH", default_value = bas_broker::protocol::DEFAULT_SOCKET)]
     pub socket: PathBuf,
@@ -310,6 +313,49 @@ pub struct BrokerArgs {
     #[cfg(not(target_os = "linux"))]
     #[arg(long, value_name = "PATH", default_value = "/var/log/bas/audit.jsonl")]
     pub audit_log: PathBuf,
+}
+
+#[cfg(unix)]
+#[derive(Debug, Subcommand)]
+pub enum BrokerCommand {
+    /// Install the broker on Linux with systemd, or bring an install up to date.
+    ///
+    /// Run it as root from the bas you want the service to run, for example
+    /// `sudo "$(command -v bas)" broker install --organization ID --origin URL`. It copies
+    /// this program to /usr/local/bin/bas, creates the system user bas, asks for the
+    /// machine token and seals it with systemd-creds, writes the systemd unit and
+    /// /etc/bas/broker.toml, starts bas-broker.service, and installs the gh and ssh-keygen
+    /// shims, the ssh config, and the system Git signing program. It prints its plan
+    /// first, changes only what differs, and keeps an existing token and broker.toml.
+    Install(BrokerInstallArgs),
+}
+
+#[cfg(unix)]
+#[derive(Debug, Args)]
+pub struct BrokerInstallArgs {
+    /// Print the plan and change nothing. Needs no root, but then it cannot see whether
+    /// the machine token is sealed.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Organization ID for a new broker.toml. Required until /etc/bas/broker.toml exists.
+    #[arg(long, value_name = "ID")]
+    pub organization: Option<String>,
+    /// HTTPS address you will open the approval pages on, such as `https://bas.example.com`.
+    /// Required until /etc/bas/broker.toml exists.
+    #[arg(long, value_name = "URL")]
+    pub origin: Option<String>,
+    /// Project ID where `bas add` creates secrets. Without it, `bas add` is refused.
+    #[arg(long, value_name = "ID")]
+    pub project: Option<String>,
+    /// The PROFILE in bas://PROFILE/SECRET-ID.
+    #[arg(long, value_name = "NAME", default_value = "home")]
+    pub profile: String,
+    /// Unix user ID that may use the broker. Repeat for more. Default: the user who ran
+    /// sudo.
+    #[arg(long = "allow-uid", value_name = "UID")]
+    pub allow_uids: Vec<u32>,
+    #[command(flatten)]
+    pub endpoint: EndpointArgs,
 }
 
 #[cfg(target_os = "linux")]
@@ -453,7 +499,7 @@ pub struct LoginArgs {
     pub from_env: bool,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct EndpointArgs {
     /// Hosted Bitwarden region. Default: the profile's, else us, then eu.
     #[arg(long, value_enum)]

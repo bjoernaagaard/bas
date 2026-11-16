@@ -12,6 +12,20 @@ Get the archive for your platform from the [releases page](https://github.com/bj
 | macOS on ARM64 | `bas-macOS-ARM64.tar.gz` | `bas`, `contrib/macos/` with the LaunchDaemons, and `contrib/policy.toml.example` |
 | Windows on x86_64 | `bas-Windows-X64.tar.gz` | `bas.exe` |
 
+Every archive from v0.9.0 on has a build provenance record, which says that GitHub Actions built the archive from this repository at the release tag. mise checks the record on every install, and you can check a downloaded archive yourself with the GitHub CLI.
+
+```sh
+gh attestation verify bas-Linux-X64.tar.gz -R bjoernaagaard/bas
+```
+
+```text
+on(mise use -g github:bjoernaagaard/bas)
+  download the archive for your platform
+  if its digest or its build provenance record doesn't match
+    stop, and install nothing
+  put bas on PATH
+```
+
 Check that no other program already uses the name `bas` before you copy `bas` onto your `PATH`. Run `command -v bas` on Linux and macOS, or `Get-Command bas` in PowerShell.
 
 ```text

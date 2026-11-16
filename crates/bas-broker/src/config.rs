@@ -94,7 +94,12 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self, Error> {
         let text = std::fs::read_to_string(path)
             .map_err(|err| Error::new(format!("could not read {}: {err}", path.display())))?;
-        let file: ConfigFile = toml::from_str(&text)
+        Self::parse(&text, path)
+    }
+
+    /// Checks settings text as [`Config::load`] checks the file at `path`.
+    pub fn parse(text: &str, path: &Path) -> Result<Self, Error> {
+        let file: ConfigFile = toml::from_str(text)
             .map_err(|err| Error::new(format!("{} is malformed: {err}", path.display())))?;
         let invalid = |reason: &str| Error::new(format!("{}: {reason}", path.display()));
         if file.allow_uids.is_empty() {

@@ -95,6 +95,7 @@ Use these commands on a machine that runs the broker.
 | Command | Options | What it does |
 |---|---|---|
 | `bas broker` | `--socket <PATH>`, `--ssh-agent-socket <PATH>`, `--config <PATH>`, `--state-dir <PATH>`, `--ca-bundle <PATH>`, `--audit-log <PATH>` (macOS) | Runs the broker, normally as `bas-broker.service` on Linux or `io.github.bjoernaagaard.bas.broker` on macOS |
+| `bas broker install` | `--dry-run`, `--organization <ID>`, `--origin <URL>`, `--project <ID>`, `--profile <NAME>`, `--allow-uid <UID>` (repeat), `--region <REGION>`, `--server-url <URL>`, `--api-url <URL>`, `--identity-url <URL>` | Installs the broker on Linux with systemd, or brings an install up to date. It prints its plan, changes only what differs, and asks for the machine token itself. It needs root unless you give `--dry-run`. |
 | `bas add <NAME>` | `--host <HOST>` (required), `--allow <METHOD PATH>` (required, repeat), `--header <HEADER>`, `--value <VALUE>` | Proposes a new proxy secret, whose value you type on the approval page. `--header` defaults to `Authorization`, and `--value` defaults to `Bearer {secret}`. |
 | `bas rotate <NAME>` | | Replaces a stored value from the approval page, or drops minted `github` or `tailscale` tokens |
 | `bas policy edit` | | Opens the policy proposal in an editor, sends it, and waits for the approval |

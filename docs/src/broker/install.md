@@ -1,19 +1,20 @@
 # Install the broker
 
-Run the numbered steps below in order as your normal user, from a console or SSH session where no agent is running, so no agent sees the machine token or the enrollment link. On a Mac, follow [Install on macOS](#install-on-macos) instead. Commands that change system files use `sudo`.
-
-The install puts one program, one systemd unit, and a few files owned by root on the machine. It also seals the machine token so that only the broker's service can read it. The files come from `contrib/linux/` in the repository.
+Run `bas broker install` as root on Linux, and then do steps 2 to 5 by hand, from a console or SSH session where no agent is running. On a Mac, follow [Install on macOS](#install-on-macos) instead.
 
 ```text
-contrib/linux/                      installed as
-├── bas-broker.service              /etc/systemd/system/bas-broker.service
-├── broker.toml.example             /etc/bas/broker.toml
-├── ../policy.toml.example          ~/.config/bas/policy.toml (your proposal)
-├── shims/
-│   ├── gh                          /usr/local/lib/bas/shims/gh
-│   └── ssh-keygen                  /usr/local/lib/bas/shims/ssh-keygen
-└── ssh_config.d/
-    └── 10-bas.conf                 /etc/ssh/ssh_config.d/10-bas.conf
+you                                     bas broker install
+  1. run it with sudo                     copies bas to /usr/local/bin/bas
+                                          creates the system user bas
+                                          asks for the machine token and seals it
+                                          writes the systemd unit and /etc/bas/broker.toml
+                                          starts bas-broker.service
+                                          installs the gh and ssh-keygen shims and the ssh config
+                                          sets the system Git signing program
+  2. publish the approval pages
+  3. enroll the first passkey
+  4. approve a first policy
+  5. put the shims on PATH and choose a signing key
 ```
 
 ## Before you start
@@ -22,56 +23,51 @@ Have each item in the table ready before step 1.
 
 | You need | Details |
 |---|---|
-| A Linux machine | It needs systemd and `systemd-creds`. |
-| An HTTPS reverse proxy for approvals | Tailscale Serve is one option. |
-| `bas` v0.4.0 or later on Linux, v0.8.1 or later on macOS | Use a release, or build it from source, as [Install bas](../getting-started/install.md) describes. |
+| A Linux machine | It needs systemd with `systemd-creds`, which Ubuntu 22.04 and Debian 12 and later have. |
+| `bas` v0.9.0 or later | Install it as [Install bas](../getting-started/install.md) describes. |
 | A Secrets Manager machine account for the broker, and an access token for it | Give the account read access to the project that holds the secrets the policy names. Give it write access to the project where `bas add` should create new secrets. |
+| Your organization ID, and the project ID for `bas add` | The Secrets Manager web app shows both. |
+| An HTTPS address for the approval pages | Such as `https://bas.example.com`. For Tailscale Serve, use `https://bas.TAILNET.ts.net`, where `TAILNET` is the name of your tailnet. Choose it now, because passkeys are bound to its hostname. |
 | A passkey device | A YubiKey, or a phone or password manager that holds passkeys |
 
-```mermaid
-flowchart TD
-    A[1. Install the program] --> B[2. Create the bas user]
-    B --> C[3. Seal the machine token]
-    C --> D[4. Install the unit and broker.toml]
-    D --> E[5. Start the broker]
-    E --> F[6. Publish the approval pages]
-    F --> G[7. Enroll the first passkey]
-    G --> H[8. Approve a first policy]
-    H --> I[9. Put the shims on PATH]
-    I --> J[10. Point ssh at the broker]
-    J --> K[11. Sign git commits through the broker]
-```
+## 1. Run the install
 
-## 1. Install the program
-
-Copy the program to `/usr/local/bin/bas`, a path that only root can write, because the unit runs `/usr/local/bin/bas broker`.
+Run the command below with your own IDs and address, and paste the machine token when it asks. `sudo` doesn't search your own `PATH`, so the command gives it the full path of `bas`.
 
 ```sh
-sudo install -o root -g root -m 0755 target/release/bas /usr/local/bin/bas
+sudo "$(command -v bas)" broker install \
+  --organization <organization-id> --project <project-id> \
+  --origin https://bas.example.com
 ```
 
-For a release archive, run the command from the extracted directory and replace `target/release/bas` with `bas`. The archive includes the `contrib/linux/` files that the later steps use.
+With mise shims on your `PATH`, write `"$(mise which bas)"` in place of `"$(command -v bas)"`.
 
-## 2. Create the bas user
+The command prints its plan, and then it runs each step that the plan marks with `change`.
 
-Create the system user `bas`, which has no login shell and no home directory of its own. systemd creates `/var/lib/bas` for it on the first start.
-
-```sh
-sudo useradd --system --home-dir /var/lib/bas --no-create-home --shell /usr/sbin/nologin bas
+```text
+change   program          /usr/local/bin/bas: create it
+change   system user      bas: create it with useradd, with no login shell
+change   machine token    /etc/credstore.encrypted/bas-bws.cred: ask for the token and seal it with systemd-creds
+change   systemd unit     /etc/systemd/system/bas-broker.service: create it
+change   settings         /etc/bas/broker.toml: write it from the options
+change   service          bas-broker.service: enable it, and start it again with the changes above
+change   gh shim          /usr/local/lib/bas/shims/gh: create it
+change   ssh-keygen shim  /usr/local/lib/bas/shims/ssh-keygen: create it
+change   ssh config       /etc/ssh/ssh_config.d/10-bas.conf: create it
+change   git signing      gpg.ssh.program in the system Git settings: set it to /usr/local/lib/bas/shims/ssh-keygen
 ```
 
-## 3. Seal the machine token
+| Option | What it sets |
+|---|---|
+| `--dry-run` | Prints the plan and changes nothing. It needs no root. |
+| `--organization <ID>` | `organization` in `[profile]` of `broker.toml` |
+| `--project <ID>` | `project` in `[profile]`, where `bas add` creates new secrets |
+| `--origin <URL>` | `origin` in `[approvals]`, the HTTPS address of the approval pages |
+| `--region eu` | The endpoints for the EU region. `--server-url`, or `--api-url` with `--identity-url`, name a server of your own. |
+| `--profile <NAME>` | The `PROFILE` in `bas://PROFILE/SECRET-ID`, which is `home` by default |
+| `--allow-uid <UID>` | A user who may use the broker. The default is the user who ran `sudo`. |
 
-Paste the machine token at the prompt, and `systemd-creds` encrypts it with a key that only root can read. `systemd-ask-password` hides what you paste. Don't put the token in a file or on a command line.
-
-```sh
-sudo install -d -o root -g root -m 0700 /etc/credstore.encrypted
-sudo sh -c 'systemd-ask-password -n "Machine token for the bas broker:" \
-  | systemd-creds encrypt --name=bws - /etc/credstore.encrypted/bas-bws.cred'
-sudo chmod 0600 /etc/credstore.encrypted/bas-bws.cred
-```
-
-systemd decrypts the token for the broker's service only, and the broker reads it from the file `bws` in `$CREDENTIALS_DIRECTORY`.
+The token goes from the hidden prompt of `systemd-ask-password` straight into `systemd-creds`, which encrypts it with a key that only root can read. It is never an argument, and `bas` never holds it.
 
 ```text
 /etc/credstore.encrypted/bas-bws.cred    root, 0600, encrypted
@@ -79,63 +75,26 @@ systemd decrypts the token for the broker's service only, and the broker reads i
     └── $CREDENTIALS_DIRECTORY/bws       decrypted, for the broker's service only
 ```
 
-## 4. Install the unit and broker.toml
-
-Install the unit and `broker.toml`, then edit `broker.toml` for this machine. The unit runs the broker as `bas`, gives it the sealed token, and allows it only the one capability it needs, which is binding port 793.
-
-```sh
-sudo install -o root -g root -m 0644 contrib/linux/bas-broker.service /etc/systemd/system/
-sudo install -d -o root -g root -m 0755 /etc/bas
-sudo install -o root -g root -m 0644 contrib/linux/broker.toml.example /etc/bas/broker.toml
-sudoedit /etc/bas/broker.toml
-```
-
-Set the keys in the table. The approval origin is the HTTPS address you will use for approvals.
-
-| Key | Set it to |
-|---|---|
-| `allow-uids` | Your user ID. Run `id -u` to find it. |
-| `organization` in `[profile]` | Your organization ID |
-| `project` in `[profile]` | The project where `bas add` creates new secrets |
-| `api-url` and `identity-url` in `[profile]` | The endpoints for your region |
-| `origin` in `[approvals]` | Such as `https://bas.example.com`. For Tailscale Serve, use `https://bas.TAILNET.ts.net`, where `TAILNET` is the name of your tailnet. |
-
-```diff
--allow-uids = [1000]
-+allow-uids = [1000]                     # your uid, from id -u
- [profile]
- name = "home"
--organization = "<organization-id>"
-+organization = "<your organization ID>"
--project = "<project-id>"
-+project = "<the project for bas add>"
- [approvals]
--origin = "https://bas.<tailnet>.ts.net"
-+origin = "https://bas.TAILNET.ts.net"
-```
-
-[Files and directories](../reference/files.md) lists every key of `broker.toml`.
-
-## 5. Start the broker
-
-Start the broker and ask it for its status.
-
-```sh
-sudo systemctl daemon-reload
-sudo systemctl enable --now bas-broker
-systemctl status bas-broker --no-pager
-curl -s --unix-socket /run/bas/broker.sock http://localhost/v1/status
-```
-
-The status reply holds the version, the hash of the active policy, and the IDs of pending approvals. Until you approve a first policy, the active policy is empty and allows nothing.
+A second run changes nothing, because each step first reads what the machine holds.
 
 ```text
-{"version":"0.8.8","policy_hash":"<sha-256 of the policy text>","requests":[]}
+on(bas broker install)
+  for each step
+    if the machine already matches
+      print ready
+    else
+      print change, and run the step
+  if /etc/bas/broker.toml exists
+    keep it                      # edit it with sudoedit, then restart bas-broker
+  if the sealed token exists
+    keep it                      # remove the file and run the install again to seal another
 ```
 
-If the broker doesn't start, `journalctl -u bas-broker -e` shows why, for example a malformed `broker.toml` or a token that Secrets Manager refused.
+After you update `bas`, run the same command again without options. It replaces `/usr/local/bin/bas` and the shims with the new release and restarts the service.
 
-## 6. Publish the approval pages
+If the service doesn't start, `journalctl -u bas-broker -e` shows why, for example a token that Secrets Manager refused. Until you approve a first policy, the active policy is empty and allows nothing.
+
+## 2. Publish the approval pages
 
 Publish the approval pages, which listen on `127.0.0.1:793`, through an HTTPS reverse proxy. Choose the hostname before you enroll a passkey, because passkeys are bound to that hostname. Tailscale is optional, and you need no Tailscale account when you use another reverse proxy.
 
@@ -147,7 +106,7 @@ Forward one HTTPS hostname to `http://127.0.0.1:793` on the broker host.
 
 1. Choose a hostname with a TLS certificate that your approval browser trusts.
 2. Configure your reverse proxy to forward requests for that hostname to `http://127.0.0.1:793` on the broker host, and keep paths and query strings as they are.
-3. Set `approvals.origin` in `/etc/bas/broker.toml` to that HTTPS address, and restart `bas-broker`.
+3. Check that `approvals.origin` in `/etc/bas/broker.toml` is that HTTPS address. If you change it, restart `bas-broker`.
 
 ```text
 Approval browser
@@ -176,7 +135,7 @@ https://bas.TAILNET.ts.net (tailnet only) (svc:bas)
 |-- / proxy http://127.0.0.1:793
 ```
 
-## 7. Enroll the first passkey
+## 3. Enroll the first passkey
 
 Open the one-time enrollment link on the device that will approve requests. While no passkey is enrolled, the broker writes the link to `/var/lib/bas/enroll-url`, which only root and the `bas` user can read.
 
@@ -191,21 +150,19 @@ sudo cat /var/lib/bas/enroll-url
 
 Name the passkey and choose Create passkey. The page says "Enrolled", and the broker deletes `enroll-url`. To add more passkeys later, run `bas passkey add` and approve with a passkey you already have.
 
-## 8. Approve a first policy
+## 4. Approve a first policy
 
 Store your secrets in Secrets Manager, write a policy that names them, and approve the policy with your passkey. The policy says which secrets the proxy may use, for which hosts and requests, and which SSH keys the ssh-agent signs with.
 
 1. Store each secret in Secrets Manager, in the broker's project. For an SSH key, store the OpenSSH private key text, which must be an ed25519 or rsa key without a passphrase.
-2. Copy the example policy, and replace each `<secret-id>` with the ID of the secret.
-3. Send the policy for approval with `bas policy edit`.
+2. Run `bas policy edit`, which opens the active policy in your editor.
+3. Add your entries, with the [example policy](https://github.com/bjoernaagaard/bas/blob/main/contrib/policy.toml.example) as the model, and replace each `<secret-id>` with the ID of the secret.
 
 ```sh
-install -d -m 0700 ~/.config/bas
-install -m 0600 contrib/policy.toml.example ~/.config/bas/policy.toml
 bas policy edit
 ```
 
-`bas policy edit` opens the proposal in `$VISUAL` or `$EDITOR`. After you save and quit, it prints the diff and the approval URL, and it waits. Open the URL, check the diff, and approve with your passkey.
+The editor is the one in `$VISUAL` or `$EDITOR`. After you save and quit, it prints the diff and the approval URL, and it waits. Open the URL, check the diff, and approve with your passkey.
 
 ```text
 $ bas policy edit
@@ -224,25 +181,18 @@ the active policy is now <hash>
 
 When the broker can't apply an approved policy, for example because an SSH key in it has a passphrase, `bas policy edit` says so, and the active policy stays as it was. [Policy reference](policy.md) describes every table.
 
-## 9. Put the shims on PATH
+## 5. Put the shims on PATH and choose a signing key
 
-Install the `gh` and `ssh-keygen` shims, and put their directory first in `PATH`. A shim is a small script that runs the real program with the broker's settings.
-
-```sh
-sudo install -d -o root -g root -m 0755 /usr/local/lib/bas/shims
-sudo install -o root -g root -m 0755 contrib/linux/shims/gh contrib/linux/shims/ssh-keygen /usr/local/lib/bas/shims/
-```
-
-With mise, add the shims directory to `PATH` in a mise config file, such as `~/.config/mise/conf.d/bas.toml`.
+Put `/usr/local/lib/bas/shims` first in your `PATH`, so that `gh` and Git's `ssh-keygen` go through the broker. With mise, add the directory in a mise config file, such as `~/.config/mise/conf.d/bas.toml`.
 
 ```toml
 [env]
 _.path = ["/usr/local/lib/bas/shims"]
 ```
 
-Without mise, put `/usr/local/lib/bas/shims` first in `PATH` in your shell profile. Then check that `command -v gh` prints `/usr/local/lib/bas/shims/gh`.
+Without mise, put the directory first in `PATH` in your shell profile. Then check that `command -v gh` prints `/usr/local/lib/bas/shims/gh`.
 
-The `gh` shim runs `gh` through the proxy with the repository of the current directory, so the broker adds a GitHub App token for the same repository. The `ssh-keygen` shim sends git's signing requests to the broker's ssh-agent, as step 11 shows.
+The `gh` shim runs `gh` through the proxy with the repository of the current directory, so the broker adds a GitHub App token for the same repository. The `ssh-keygen` shim sends git's signing requests to the broker's ssh-agent, as the end of this step shows.
 
 ```text
 gh pr list                                  (you type)
@@ -256,12 +206,9 @@ gh pr list                                  (you type)
 
 The `gh` shim makes `gh auth token` fail on purpose, because there is no raw token to print. A tool that asks `gh auth token` for a token, such as mise, falls back to anonymous requests.
 
-## 10. Point ssh at the broker
-
-Install `10-bas.conf`, which tells `ssh` to ask the broker's ssh-agent for every host. `ssh` and git over SSH then use the keys in `[ssh.NAME]` entries with `use = ["auth"]`.
+The install pointed `ssh` at the broker's ssh-agent for every host, so `ssh` and git over SSH use the keys in `[ssh.NAME]` entries with `use = ["auth"]`. Check it with the commands below, and then remove the old private key files from `~/.ssh` and keep only the `.pub` files.
 
 ```sh
-sudo install -o root -g root -m 0644 contrib/linux/ssh_config.d/10-bas.conf /etc/ssh/ssh_config.d/
 SSH_AUTH_SOCK=/run/bas/ssh-agent.sock ssh-add -L
 ssh -T git@github.com
 ```
@@ -272,22 +219,17 @@ ssh-ed25519 AAAA... bas:github
 Hi USER! You've successfully authenticated, but GitHub does not provide shell access.
 ```
 
-The agent lists each key with the comment `bas:NAME`. `/etc/ssh/ssh_config` must include `/etc/ssh/ssh_config.d/*.conf`, which it does by default on Debian and Ubuntu. Remove the old private key files from `~/.ssh`, and keep only the `.pub` files.
+`/etc/ssh/ssh_config` must include `/etc/ssh/ssh_config.d/*.conf`, which it does by default on Debian and Ubuntu.
 
-## 11. Sign git commits through the broker
-
-Make git sign through the `ssh-keygen` shim with a system setting, and name the public key to sign with in your own git settings.
+The install also made Git sign through the `ssh-keygen` shim. Name the public key to sign with in your own Git settings.
 
 ```sh
-sudo git config --system gpg.ssh.program /usr/local/lib/bas/shims/ssh-keygen
 install -d -m 0700 ~/.ssh
 SSH_AUTH_SOCK=/run/bas/ssh-agent.sock ssh-add -L | grep 'bas:git_signing' > ~/.ssh/git_signing.pub
 git config --global gpg.format ssh
 git config --global user.signingkey ~/.ssh/git_signing.pub
 git config --global commit.gpgsign true
 ```
-
-git signs a commit by running `ssh-keygen -Y sign`, which uses `SSH_AUTH_SOCK` and ignores the ssh config. The shim points `SSH_AUTH_SOCK` at the broker.
 
 ```text
 git commit
@@ -300,7 +242,13 @@ A key with `use = ["sign-git"]` signs only SSH signatures in the `git` namespace
 
 ## Check the install
 
-Run the commands below in a scratch Git repository. The first two need a `JINA_API_KEY` entry in the policy, so use the name of any `[secret.NAME]` entry you have.
+Run `bas doctor --broker` in a Git repository, and it exits 0 when the broker answers, its machine account sees every reference of the policy, and Git signs a commit through the broker.
+
+```sh
+bas doctor --broker
+```
+
+Then run the commands below in a scratch Git repository. The first two need a `JINA_API_KEY` entry in the policy, so use the name of any `[secret.NAME]` entry you have.
 
 ```sh
 bas run --with JINA_API_KEY -- sh -c 'env | grep -E "^(HTTPS_PROXY|SSL_CERT_FILE)="'
@@ -325,7 +273,7 @@ The audit shows one entry for each check.
 
 ## Install on macOS
 
-Run the commands in this section from an admin account, or from a root shell, while no agent runs. On macOS, a LaunchDaemon runs the broker as the role account `_bas`, and the files come from `contrib/macos/`. Steps 8, 10, and 11 above work the same way with `/var/run/bas/` in place of `/run/bas/`.
+Run the commands in this section from an admin account, or from a root shell, while no agent runs. On macOS, a LaunchDaemon runs the broker as the role account `_bas`, and the files come from `contrib/macos/`. `bas broker install` supports Linux only, so on macOS you run each command yourself. Steps 4 and 5 above work the same way with `/var/run/bas/` in place of `/run/bas/`.
 
 ```text
 contrib/macos/                                  installed as
@@ -398,7 +346,7 @@ The append-only flag lets the broker add lines and stops anyone but root from ch
 
 ### Install broker.toml and load the daemons
 
-Install `broker.toml`, set the same keys as in step 4, and load both daemons. Give each Mac its own approval origin, such as `https://bas-mini.TAILNET.ts.net`, so a passkey never approves a request on the wrong broker.
+Install `broker.toml`, set the keys that its comments describe, and load both daemons. Give each Mac its own approval origin, such as `https://bas-mini.TAILNET.ts.net`, so a passkey never approves a request on the wrong broker.
 
 ```sh
 sudo install -d -o root -g wheel -m 0755 /etc/bas
@@ -424,8 +372,16 @@ Finish with the same steps as on Linux.
 
 | Task | How |
 |---|---|
-| Enroll the first passkey | Open the link as in step 7. |
-| Install the `gh` and `ssh-keygen` shims and `10-bas.conf` | Use the files from `contrib/macos/`, as in steps 9 to 11. The macOS `gh` shim reads the broker's certificate bundle from `/var/run/bas/ca-bundle.pem`. |
+| Enroll the first passkey | Open the link as in step 3. |
+| Install the `gh` and `ssh-keygen` shims and `10-bas.conf` | Run the commands below from the extracted archive. The macOS `gh` shim reads the broker's certificate bundle from `/var/run/bas/ca-bundle.pem`. |
+| Approve a policy, and set up `PATH` and signing | Follow steps 4 and 5. |
+
+```sh
+sudo install -d -o root -g wheel -m 0755 /usr/local/lib/bas/shims
+sudo install -o root -g wheel -m 0755 contrib/macos/shims/gh contrib/macos/shims/ssh-keygen /usr/local/lib/bas/shims/
+sudo install -o root -g wheel -m 0644 contrib/macos/ssh_config.d/10-bas.conf /etc/ssh/ssh_config.d/
+sudo git config --system gpg.ssh.program /usr/local/lib/bas/shims/ssh-keygen
+```
 
 To remove the broker, run the two commands below, and then delete the files that the tree at the top of this section lists.
 

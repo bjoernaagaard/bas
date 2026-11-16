@@ -5,6 +5,8 @@ mod approval;
 mod audit;
 #[cfg(unix)]
 mod broker_commands;
+#[cfg(target_os = "linux")]
+mod broker_install;
 mod cli;
 mod discover;
 mod doctor;
@@ -159,6 +161,20 @@ fn dispatch(command: Command) -> Result<ExitCode> {
             agent_access::pair(name, relay)
         }
         Command::Tui(args) => tui(&args),
+        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
+        Command::Broker(cli::BrokerArgs {
+            command: Some(cli::BrokerCommand::Install(args)),
+            ..
+        }) => broker_install::install(args),
+        #[cfg(not(target_os = "linux"))]
+        Command::Broker(cli::BrokerArgs {
+            command: Some(cli::BrokerCommand::Install(_)),
+            ..
+        }) => Err(Error::new(
+            "bas broker install supports Linux with systemd. On macOS, follow \
+             https://bjoernaagaard.github.io/bas/broker/install.html#install-on-macos",
+        )),
         #[cfg(unix)]
         Command::Broker(args) => {
             bas_broker::serve(&bas_broker::Options {

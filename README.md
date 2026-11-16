@@ -68,18 +68,34 @@ Without mise, download the archive for your platform from the [releases page](ht
 
 ## Add the broker
 
-Install the broker yourself on Linux with systemd, or on macOS with a standard daily account, because its steps need root. You also need an HTTPS address for the approval pages, e.g., Tailscale Serve, and a passkey, e.g., a YubiKey.
+Run one command as root on Linux with systemd, and paste the machine account token when it asks. You also need an HTTPS address for the approval pages, e.g., Tailscale Serve, and a passkey, e.g., a YubiKey.
 
-```text
-install the broker                      # you, with root, from the install guide
-  the bas system user                   holds the token and every secret, away from your own user
-  a system service                      runs bas broker
-  your passkey                          approves the first policy and every later change
-check it
-  bas doctor --broker                   # you or the agent
+```sh
+sudo "$(command -v bas)" broker install \
+  --organization <organization-id> --project <project-id> \
+  --origin https://bas.example.com
 ```
 
-The [install guide](https://bjoernaagaard.github.io/bas/broker/install.html) lists each command for Linux and macOS, and the files it installs are in [`contrib/`](contrib).
+```text
+bas broker install                      # prints its plan first, and --dry-run stops there
+  the bas system user                   holds the token and every secret, away from your own user
+  the sealed token                      goes from a hidden prompt into systemd-creds, never through an argument
+  bas-broker.service                    runs the broker
+  the gh and ssh-keygen shims           send gh, ssh, and commit signing through the broker
+then you                                # the install guide has each step
+  publish the approval pages, enroll your passkey, and approve a first policy
+  bas doctor --broker                   exits 0 when the broker works
+```
+
+A second run changes nothing, and a run after an update installs the new release. The [install guide](https://bjoernaagaard.github.io/bas/broker/install.html) has the remaining steps and the commands for macOS.
+
+## Check what you install
+
+Every release archive has a build provenance record, which says that GitHub Actions built it from this repository at the release tag. mise checks the record on every install, and you can check an archive yourself.
+
+```sh
+gh attestation verify bas-Linux-X64.tar.gz -R bjoernaagaard/bas
+```
 
 ## Documentation
 
