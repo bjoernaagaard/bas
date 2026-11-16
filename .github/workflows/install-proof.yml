@@ -52,13 +52,11 @@ jobs:
           BWS_ACCESS_TOKEN: ${{ secrets.BAS_PROOF_TOKEN }}
         run: |
           set -euo pipefail
-          bas auth login --profile proof --from-env
-          organization="$(bas auth list | sed -n 's/^proof .*organization=\([0-9a-f-]*\).*/\1/p')"
-          sudo "$(command -v bas)" broker install --dry-run \
-            --organization "$organization" --project "$PROJECT" --origin "$ORIGIN"
-          # systemd-ask-password reads the token from a terminal, so `script` gives it one.
-          printf '%s\n' "$BWS_ACCESS_TOKEN" | script -qec "stty -echo; sudo $(command -v bas) broker install \
-            --organization $organization --project $PROJECT --origin $ORIGIN" /dev/null
+          bas auth login proof --from-env
+          field() { bas auth list | sed -n "s/^proof .* $1=\([^ ]*\).*/\1/p"; }
+          options="--organization $(field organization) --api-url $(field api) --identity-url $(field identity) --project $PROJECT --origin $ORIGIN"
+          bas broker install --dry-run $options
+          python3 .github/install-proof/type-token.py sudo "$(command -v bas)" broker install $options
           systemctl is-active bas-broker
       - name: Run the install again
         run: |
