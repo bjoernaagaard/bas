@@ -2,31 +2,33 @@
 
 # Bitwarden Agent Secrets
 
-Install `bas` with `mise use -g github:bjoernaagaard/bas`, and your coding agents can use secrets from Bitwarden Secrets Manager without seeing the values.
-
-`bas` is for a person who runs coding agents, e.g., Claude Code or Codex, on their own machines and keeps API keys, SSH keys, and service tokens in Bitwarden Secrets Manager. An agent names a secret, and `bas` adds the value where it's needed, so the value stays out of the agent's commands, output, and transcript.
+`bas` lets a coding agent, e.g., Claude Code or Codex, use the API keys, SSH keys, and GitHub tokens you keep in Bitwarden Secrets Manager without seeing a value.
 
 ```sh
-mise use -g github:bjoernaagaard/bas     # or download an archive from the releases page
-bas --version
-bas auth login                           # paste a machine account token when it asks
+bas run --with JINA_API_KEY -- curl https://api.jina.ai/v1/embeddings -d @request.json
 ```
 
-`bas` isn't ready for production use yet. The source is under the MIT license, and the full documentation is at <https://bjoernaagaard.github.io/bas/>.
+The agent names a secret, and `bas` adds the value where it's needed, so the value stays out of the agent's commands, output, and transcript. `bas` isn't ready for production use yet, and the source is under the MIT license.
 
-## Choose a setup
+## What bas does
 
-Install the broker when the machine can run it, because programs then never get a raw value, and use direct access everywhere else.
+`bas` works in two setups, and the broker setup gives an agent more because programs then never get a raw value.
 
-```text
-on(choose setup)
-  if the machine runs Linux with systemd, or macOS with a standard daily account
-    install the broker                      programs never see values
-  else
-    use direct access                       the program gets the value in its environment
-```
+| Feature | What the agent runs | Needs the broker |
+|---|---|---|
+| A key added on the way to the API host | `bas run --with NAME -- command` | Yes |
+| SSH and signed git commits without a key file | `ssh host`, `git push` | Yes |
+| A one-hour GitHub token for one repository | `gh pr list` | Yes |
+| A Tailscale API token | `bas run --with tailscale -- command` | Yes |
+| A change that waits for your passkey | `bas add NAME`, `bas policy edit` | Yes |
+| A record of each use and each refusal | `bas audit --since 1h` | Yes |
+| A list of secrets as references, never values | `bas find --profile NAME` | No |
+| A value in one program's environment, hidden in its output | `bas run --env KEY=bas://NAME/<id> -- command` | No |
+| Secrets on a machine that holds no token | `bas pair`, and you approve each request | No |
+| A terminal view of secrets and the policy | `bas tui` | No |
+| A read-only MCP server for the policy and pending approvals | `bas mcp` | Yes |
 
-With the broker, the program sends its request without the key, and the broker adds the key on the way to the API host.
+With the broker, the program sends its request without the key, and the broker adds the key on the way out.
 
 ```mermaid
 sequenceDiagram
@@ -44,214 +46,49 @@ sequenceDiagram
     API-->>Program: the response, with no key in it
 ```
 
-## Quick start for agents
+## Set up
 
-Give the agent the `bas` program and the agent skill that tells it how to use `bas`, and then let it list what it may use.
-
-First, install `bas`. With mise, run the command below. Without mise, download the archive for your platform from the [releases page](https://github.com/bjoernaagaard/bas/releases) and put `bas` on your `PATH`.
-
-```sh
-mise use -g github:bjoernaagaard/bas
-bas --version
-```
-
-Second, install the agent skill, which works with Claude Code, Codex, and other agents that read skills.
-
-```sh
-npx skills add bjoernaagaard/bas --skill bitwarden-agent-secrets
-```
-
-Third, let the agent list what it can use. The command depends on the setup.
+Give your agent the message below, and it does every step except the sign-in, which you do yourself so that the token stays out of the chat.
 
 ```text
-on(agent starts work)
-  if /run/bas/broker.sock or /var/run/bas/broker.sock exists
-    bas policy show                          every credential the broker holds, never values
-  else
-    bas auth list                            profiles on this machine
-    bas find --profile NAME [KEY]            secrets as bas://NAME/<id>, never values
+Install bas with `mise use -g github:bjoernaagaard/bas`, install its skill with
+`npx skills add bjoernaagaard/bas --skill bitwarden-agent-secrets`, and then run
+`bas doctor` and tell me what is left.
 ```
-
-## What an agent runs
-
-On a broker machine, the agent uses each kind of policy entry in the way the table shows, and `bas policy show` prints the exact command for every entry.
-
-| Policy entry | What the agent runs | What happens |
-|---|---|---|
-| API key | `bas run --with NAME -- command` | The broker adds the key to the allowed HTTPS requests |
-| Value for a config file | `bas get bas://profile/<id>` in a `"!cmd"` setting | The tool reads the value when it starts |
-| SSH key | `ssh host`, `git push` | The broker's ssh-agent signs, and git commits are signed |
-| GitHub | `gh pr list`, `git push` | The broker adds a one-hour token for the repository |
-| Tailscale | `bas run --with tailscale -- command` | The broker adds a Tailscale API token |
-
-Without a broker, the agent passes a reference to `bas run`, and `bas` puts the value in the program's environment for that one run.
-
-```sh
-bas auth login                                    # paste a machine account token when it asks
-bas find --profile default API
-bas run --env "API_TOKEN=bas://default/<secret-id>" -- your-command
-```
-
-## Set up the broker on Linux
-
-Run the five steps below to start the broker as a separate system user, which keeps the machine account token and every secret away from your own user.
-
-You need a Secrets Manager machine account and its access token, systemd, and an HTTPS address for the approval pages, e.g., Tailscale Serve.
-
-First, install the program, the `bas` user, and the sealed token. Run the commands from the extracted release archive, which includes `contrib/`.
-
-```sh
-sudo install -o root -g root -m 0755 bas /usr/local/bin/bas
-sudo useradd --system --home-dir /var/lib/bas --no-create-home --shell /usr/sbin/nologin bas
-sudo install -d -o root -g root -m 0700 /etc/credstore.encrypted
-sudo sh -c 'systemd-ask-password -n "Machine token for the bas broker:" \
-  | systemd-creds encrypt --name=bws - /etc/credstore.encrypted/bas-bws.cred'
-```
-
-Second, install the service and its settings, and start it.
-
-```sh
-sudo install -o root -g root -m 0644 contrib/linux/bas-broker.service /etc/systemd/system/
-sudo install -d -o root -g root -m 0755 /etc/bas
-sudo install -o root -g root -m 0644 contrib/linux/broker.toml.example /etc/bas/broker.toml
-sudoedit /etc/bas/broker.toml                     # set the profile, project, and approval origin
-sudo systemctl daemon-reload && sudo systemctl enable --now bas-broker
-```
-
-Third, publish the approval pages over HTTPS and enroll a passkey, e.g., a YubiKey. Open the enrollment link in a browser on a device that can use the passkey.
-
-```sh
-sudo tailscale serve --service=svc:bas --https=443 127.0.0.1:793
-sudo cat /var/lib/bas/enroll-url
-```
-
-Fourth, write a policy that lists what agents may use, and approve it with the passkey. `bas policy edit` prints the approval link and waits.
-
-```sh
-install -d -m 0700 ~/.config/bas
-install -m 0600 contrib/policy.toml.example ~/.config/bas/policy.toml
-bas policy edit
-```
-
-Fifth, put the shims on `PATH` and point `ssh` and git at the broker, so `gh`, `ssh`, and commit signing go through it.
-
-```sh
-sudo install -d -o root -g root -m 0755 /usr/local/lib/bas/shims
-sudo install -o root -g root -m 0755 contrib/linux/shims/gh contrib/linux/shims/ssh-keygen /usr/local/lib/bas/shims/
-sudo install -o root -g root -m 0644 contrib/linux/ssh_config.d/10-bas.conf /etc/ssh/ssh_config.d/
-sudo git config --system gpg.ssh.program /usr/local/lib/bas/shims/ssh-keygen
-export PATH="/usr/local/lib/bas/shims:$PATH"      # or put it in your shell or mise config
-```
-
-The broker setup leaves the files below on the machine.
 
 ```text
-/usr/local/bin/bas                            the program
-/etc/systemd/system/bas-broker.service        runs bas broker as the bas user
-/etc/credstore.encrypted/bas-bws.cred         the sealed machine account token
-/etc/bas/broker.toml                          profile, project, and approval origin
-/var/lib/bas/                                 active policy, passkeys, proxy certificate
-/run/bas/broker.sock                          where bas talks to the broker
-/usr/local/lib/bas/shims/                     gh and ssh-keygen through the broker
-~/.config/bas/policy.toml                     your next policy proposal
+setup
+  agent   mise use -g github:bjoernaagaard/bas      installs bas
+  agent   npx skills add bjoernaagaard/bas ...      installs the skill that teaches the agent bas
+  you     bas auth login                            paste a machine account token when it asks
+  agent   bas doctor                                reports what is ready and what is left
 ```
 
-On macOS, a LaunchDaemon runs the broker as the `_bas` account, with the files from `contrib/macos/` and paths under `/var/run/bas/`. The [macOS section of the install guide](https://bjoernaagaard.github.io/bas/broker/install.html#install-on-macos) lists the commands.
+Without mise, download the archive for your platform from the [releases page](https://github.com/bjoernaagaard/bas/releases) and put `bas` on your `PATH`.
 
-## Check that it works
+## Add the broker
 
-Run the commands below after the setup, with the name of any API key entry from your policy.
-
-```sh
-bas policy show                                   # lists every entry, without values
-bas run --with JINA_API_KEY -- true               # starts, because the entry exists
-bas run --with NOT_IN_POLICY -- true              # refused, because the entry doesn't exist
-bas audit --since 10m                             # what the broker allowed and refused
-bas tui                                           # browse the policy and pending approvals
-```
-
-## Change what agents may use
-
-Approve every change to the broker with an enrolled passkey, because the broker waits for that approval and applies the change only after it.
-
-```mermaid
-sequenceDiagram
-    participant You
-    participant bas
-    participant Broker as bas broker
-    participant Page as approval page
-    You->>bas: bas policy edit, bas add, bas rotate, or bas passkey add
-    bas->>Broker: send the request
-    Broker-->>bas: approval link
-    You->>Page: open the link and check the change
-    Page->>Broker: approve with your passkey
-    Broker-->>bas: applied
-```
-
-| To do this | Run |
-|---|---|
-| Add an API key, typing the value on the approval page | `bas add NAME --host HOST --allow "POST /v1/*"` |
-| Change the policy | `bas policy edit` |
-| Replace a stored value | `bas rotate NAME` |
-| List the passkeys that can approve | `bas passkey list` |
-| Replace every passkey with new ones | `bas passkey add --replace` |
-
-## Connect an MCP client
-
-Add `bas mcp` to an MCP client's configuration as a stdio server, and the client can read the broker's policy and pending approvals over stdin and stdout on Linux and macOS.
-
-```json
-{ "mcpServers": { "bas": { "command": "bas", "args": ["mcp"] } } }
-```
-
-The server has three read-only tools, and none of them returns a secret value or can approve, deny, or change a request.
-
-| Tool | What it returns |
-|---|---|
-| `policy_entries` | The policy hash, and each entry's kind, name, rules, and command, without raw policy text or header templates |
-| `broker_status` | The broker version, the policy hash, and the requests that wait for approval |
-| `approve_pending` | The state of one approval, given its `id`, after waiting up to `wait_seconds` (0 to 25) |
-
-The server speaks [MCP 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25), and a person always approves on the approval page with a passkey.
+Install the broker yourself on Linux with systemd, or on macOS with a standard daily account, because its steps need root. You also need an HTTPS address for the approval pages, e.g., Tailscale Serve, and a passkey, e.g., a YubiKey.
 
 ```text
-on(approve_pending finds a pending request)
-  if the client declares support for URL elicitation
-    return a URL elicitation error with the approval link
-  else
-    return the link as text in the tool result
-on(the client cancels the call)
-  stop the wait, and leave the request as it is
-on(the client retries the call)
-  read the same request again
-on(an unknown request, or a refused lookup)
-  return a tool error
+install the broker                      # you, with root, from the install guide
+  the bas system user                   holds the token and every secret, away from your own user
+  a system service                      runs bas broker
+  your passkey                          approves the first policy and every later change
+check it
+  bas doctor --broker                   # you or the agent
 ```
 
-| Approval state | Meaning |
-|---|---|
-| `pending` | The request still waits for a passkey |
-| `approved` | The broker applied the change |
-| `denied` | Someone denied it on the approval page |
-| `expired` | Nobody approved it within 15 minutes |
-| `failed` | A passkey approved it, but the broker couldn't apply it |
-
-The tool returns no approval result payload and no error details.
-
-The server runs as the user who starts it, so the broker allows it only when that uid is in `broker.toml`. It uses `BAS_BROKER_SOCKET` like the other commands, and it stops when stdin closes.
+The [install guide](https://bjoernaagaard.github.io/bas/broker/install.html) lists each command for Linux and macOS, and the files it installs are in [`contrib/`](contrib).
 
 ## Documentation
 
-Read the full guides at <https://bjoernaagaard.github.io/bas/>, starting from the page in the table that matches your task.
+Read the full guides at <https://bjoernaagaard.github.io/bas/>, starting from the page that matches your task.
 
 | Page | What it covers |
 |---|---|
-| [Install bas](https://bjoernaagaard.github.io/bas/getting-started/install.html) | Releases and building from source |
 | [Find and use secrets](https://bjoernaagaard.github.io/bas/getting-started/use-secrets.html) | `bas find`, `bas run`, and reference templates |
-| [How the broker works](https://bjoernaagaard.github.io/bas/broker/overview.html) | The proxy, the ssh-agent, minted tokens, and approvals |
-| [Install the broker](https://bjoernaagaard.github.io/bas/broker/install.html) | Every step on Linux and macOS, with the files in [`contrib/`](contrib) |
-| [Policy](https://bjoernaagaard.github.io/bas/broker/policy.html) | Every table a policy can hold |
+| [How the broker works](https://bjoernaagaard.github.io/bas/broker/overview.html) | The proxy, the ssh-agent, GitHub tokens, and approvals |
+| [Policy](https://bjoernaagaard.github.io/bas/broker/policy.html) | What agents may use, and how you change it |
 | [Lock down the host](https://bjoernaagaard.github.io/bas/broker/lock-down.html) | What must be true for the broker to keep values from agents |
-| [Commands](https://bjoernaagaard.github.io/bas/reference/commands.html) | Every command and option |
-
-The pages are also in [`docs/src`](docs/src), and the agent skill is in [`skills/bitwarden-agent-secrets/SKILL.md`](skills/bitwarden-agent-secrets/SKILL.md).
+| [Commands](https://bjoernaagaard.github.io/bas/reference/commands.html) | Every command and option, including `bas mcp` |
