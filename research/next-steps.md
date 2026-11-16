@@ -534,62 +534,190 @@ bas mcp  (stdio, runs as the agent's user)
 
 ## A thorough bas doctor
 
-Today `bas doctor` checks only the build, the profiles, and the machine token, so it found none of the errors from 14 Nov. Each error below took a person or an agent to find by hand, and a doctor could find each one in a second.
+Status: investigated on homelab on 16 Nov 2026. The three checks below are specified,
+not implemented. Keep this increment to Git signing, client and broker compatibility,
+and policy references. Physical YubiKey verification is postponed until the operator
+is present, as the final manual step. It is not evidence required for the broker's
+software signing key.
 
-| Error found by hand on 14 Nov | Doctor check that finds it |
+### Evidence from the current installation
+
+The investigation used the installed commands, effective Git configuration, socket
+responses, and source code. The earlier incident descriptions are leads, not retained
+failure transcripts. The compatibility fix in commit `a31f6d2` records that a 0.8.5
+client rejected a policy field from a 0.8.6 broker.
+
+| Actual probe | Observed result | What it establishes |
+|---|---|---|
+| `bas doctor` | Build 0.8.7, one profile, machine token not configured, exit 0 | Only the existing offline checks passed. Homelab normally has no client machine token. |
+| `BAS_BROKER_SOCKET=/dev/null bas policy show` | Connection refused, exit 1 | This invocation could not reach its selected broker. |
+| `BAS_BROKER_SOCKET=/dev/null bas doctor` | Same offline rows, exit 0 | Today's doctor does not inspect the broker. |
+| `GET /v1/status` through `/run/bas/broker.sock` | HTTP 200, version 0.8.7 | The running broker answered this request. |
+| `GET /v1/policy` and `bas policy show` | HTTP 200, 11 readable entries with 13 distinct references | The current client can display the active policy. Secret existence remains unchecked. |
+| Fresh `git commit-tree -S` with isolated object storage, then `git verify-commit` | Good Git signature, both commands exited 0 | Effective signing and local trust verification worked in this repository. No branch was updated. |
+| Verify that commit with `-c gpg.ssh.allowedSignersFile=/dev/null` | No principal matched, exit 1 | A valid signature alone does not establish local trust. |
+| Sign with `-c user.signingkey=bas:git_signing` | Could not load public key, nonzero exit | The agent comment is not a signing key path. The old proposed fix was invalid. |
+| Verify a detached signature against changed message bytes | Incorrect signature, exit 255 | Independent OpenSSH verification rejects altered content. |
+| `GET /v1/doctor/references` | HTTP 404 | The proposed metadata check is unavailable on this broker. It says nothing about missing secrets. |
+
+Effective settings came from `/etc/gitconfig` and `~/.gitconfig` in the repository's
+working directory. `gpg.format` is `ssh`, `user.signingkey` is
+`~/.ssh/git_signing.pub`, and `gpg.ssh.allowedSignersFile` is
+`~/.config/git/allowed_signers`. The signing program is
+`/usr/local/lib/bas/shims/ssh-keygen`. Its installed contents select
+`/run/bas/ssh-agent.sock` before executing `/usr/bin/ssh-keygen`.
+The public key fingerprint observed in verification was
+`SHA256:3+bvJJP58M7vROs+IrPMI8vhDlypInjhTMJCYkeUn2k`.
+
+### What each result means
+
+Each result needs a stable check name, status, evidence, and a conditional fix.
+Use `warning` with an explicit reason when evidence is unavailable. Do not convert
+a timeout, unsupported configuration, or refused request into either success or a
+claim that a secret was deleted. Exit 1 if any check fails, otherwise 2 if any check
+warns, otherwise 0. Keep `not configured` for optional setup that was not requested.
+
+| Check | Ready | Failed | Warning or unavailable evidence |
+|---|---|---|---|
+| Git signing | A fresh disposable commit is signed through effective Git settings and accepted by `git verify-commit`. | A supported signing configuration produces an explicit signing failure or fails trust verification. Report the stage that failed. | No repository, unsupported signing format or key selection, uninspected signing wrapper, hardware interaction, or timeout prevents the probe. |
+| Client and broker compatibility | The current client decodes status and displays the active policy through `ActivePolicy::entries()`. Name the operations actually checked. | A returned required reply or policy cannot be decoded, or access is explicitly refused. Report decoding and authorization separately. | The socket is unreachable, a request times out, or a required diagnostic endpoint is unsupported. Different version strings are a warning about drift, not proof of incompatibility. |
+| Policy references | A complete successful identifier listing contains every distinct reference in the policy snapshot. | A completed listing omits a reference. Say "not visible to the broker's machine account", not "deleted". | Listing fails, times out, cannot establish completeness, or the policy changes before results can be associated with the current snapshot. |
+
+Signing readiness applies to the current repository and effective configuration.
+It does not prove another repository, another identity, remote GitHub trust, or the
+future availability of a key. The shell's `SSH_AUTH_SOCK` and `ssh-add -L` are not
+authoritative when the signing program selects a different agent. Even a key listed
+by the correct agent can refuse signing because its policy allows only `auth`.
+
+Compatibility readiness covers status and policy display, not every API operation.
+Equal version strings cannot prove compatibility. Different versions are allowed
+by the [socket reply contract](../docs/src/reference/socket-api.md).
+`ActivePolicy::entries()` uses broker summaries when present and parses policy text
+only when summaries are absent. Preserve that behavior instead of adding a second
+policy parser or rejecting every unequal version.
+
+Reference readiness establishes identifier visibility at the time of the request.
+It does not establish that a value decrypts, has the right format, still works with
+its upstream service, or remains visible after the check. A deleted secret and a
+secret hidden by permissions are indistinguishable from an absent identifier.
+
+### Smallest implementation
+
+Add `bas doctor --broker` to run these three checks explicitly. Preserve the current
+offline default and the existing `--profile` behavior. Add `--json` for the same
+results as the text output, with no second diagnostic path. Do not add a daemon,
+new dependency, general plugin system, or automatic repair.
+
+| Existing owner | Small change |
 |---|---|
-| Commits failed to sign with the shims first on PATH | Git signing key isn't held by the agent that `gpg.ssh.program` uses |
-| The mini's `bas tui` couldn't read the broker's policy | Client version older than the broker |
-| A helper entry pointed at a deleted secret | Policy reference that Secrets Manager can't find |
-| Keychain prompts after every upgrade | macOS binary signed ad hoc |
-| mise hit GitHub's rate limit | `gh auth token` refused, so mise calls GitHub without a login |
-| homelab couldn't reach OpenWrt or the mini's T3 | Tailnet policy blocks a port the setup needs |
+| `crates/bas/src/cli.rs`, `doctor.rs`, `main.rs`, and `output.rs` | Add the opt-in checks, warning status, structured evidence and fix fields, JSON output, and exit aggregation. Existing offline checks remain usable. |
+| Git subprocesses inside the doctor | Read only the signing configuration keys with origin and scope. Let Git select the key and verify trust. Use a disposable object directory without changing refs, the index, hooks, or config. |
+| `crates/bas-broker/src/client.rs` and `protocol.rs` | Reuse status and policy requests. Add the typed reference diagnostic request and reply. Preserve additive reply compatibility. |
+| `crates/bas-broker/src/server.rs` and `policy.rs` | Add authenticated `GET /v1/doctor/references`, using the existing peer UID check. Enumerate references from typed policy entries and retain each owner and field. |
+| `crates/bas-core/src/secrets.rs` | Reuse `Session::list_identifiers(None)`, which uses metadata endpoints without secret values. No new credential path is needed. |
 
-The doctor groups its checks by area, and each check reports ready, warning, or failed, with one line that says how to fix it.
+First support the inspected shipped signing shim with an explicit public key path
+or Git's `key::` public key form. Other wrappers, `gpg.ssh.defaultKeyCommand`, private
+key files, and hardware keys must report that the noninteractive probe is unsupported
+until their no-prompt behavior is established. Do not execute arbitrary key discovery
+commands during the default diagnosis. Run subprocesses without terminal input and
+terminate the whole probe on a deadline. A timeout alone does not prevent a hardware
+prompt, so hardware exclusion must happen before invocation.
 
-```text
-bas doctor
-├── install       bas on PATH, its version, the broker's version, macOS code signature
-├── broker        socket answers, status, policy readable, approval page reachable over HTTPS
-├── policy        every bas:// reference exists, no helper or secret named github or tailscale
-├── passkeys      at least two passkeys, so losing one key doesn't lock you out
-├── proxy         CA bundle present and valid, proxy port open, one test request per secret host
-├── ssh           ssh config points at the broker's agent, agent lists every ssh entry
-├── git signing   gpg.format, gpg.ssh.program, user.signingkey held by that agent, allowed_signers, test signature
-├── github        gh shim first on PATH, App token for this repository, user token answers who you are
-├── tailscale     approval origin reachable, ports the setup needs aren't blocked
-└── profiles      each profile's token readable without a keychain prompt
-```
+Use a ten second deadline for each signing or socket probe. Apply a ten second
+deadline to the broker's metadata request too, so cancellation cannot leave an
+unbounded upstream operation. An empty policy needs no upstream request and reports
+zero checked references. Return fixed diagnostic messages, never raw upstream bodies,
+private key contents, tokens, secret values, or complete environment output.
 
-```text
-on(check git signing)
-  program = git config gpg.ssh.program, or ssh-keygen from PATH
-  agent   = the SSH_AUTH_SOCK that program uses
-  key     = git config user.signingkey
-  if agent doesn't list key
-    failed  "git signs with <key>, but <agent> doesn't hold it"
-    fix     "set user.signingkey to the key the agent lists, or set gpg.ssh.program"
-  sign a test message in a temporary directory
-  if the signature doesn't verify with allowed_signers
-    failed  "the signing key isn't in allowed_signers"
-```
+For references, capture one policy snapshot and enumerate `secret.ref`, `helper.ref`,
+`ssh.ref`, `github.private_key`, optional `github.user_token`, `tailscale.client_id`,
+and `tailscale.client_secret`. Deduplicate requests by identifier but retain every
+policy location in the result. Use the organization listing, not the broker's project
+filter, because valid references may point outside the default creation project.
+The parser already requires every reference to use the broker's profile.
 
-```text
-bas doctor  (example output on the mini)
-ready    install      bas 0.8.7, broker 0.8.7
-warning  install      bas is signed ad hoc, so the keychain asks again after each upgrade
-ready    broker       answers on /var/run/bas/broker.sock, policy 186b4c7052eb
-ready    passkeys     home, carry
-failed   git signing  git signs with ...IIbJtU, but /var/run/bas/ssh-agent.sock doesn't hold it
-         fix          set gpg.ssh.program to /usr/local/lib/bas/shims/ssh-keygen and user.signingkey to bas:git_signing
-```
+Return the snapshot's existing policy identity, checked count, and per-reference
+visibility. Compare against the current policy identity before reporting readiness.
+If it changed, report a warning and ask for a rerun. Never return an empty missing
+list as success when the upstream request failed. Verify the locked SDK's listing
+completeness before implementing absence as a failure. Neither `Session::get` nor
+`bas get` belongs in this diagnostic.
 
-| Rule | Why |
+### Fixes must follow the observed failure
+
+| Evidence | Concrete fix to show, without applying it |
 |---|---|
-| The doctor never prints a value | Agents run it, and its output lands in transcripts |
-| Every check runs without an approval | Agents can run it at the start of a task |
-| `--json` gives one object per check | Agents and the TUI can read it |
-| Exit 0 when ready, 1 on a failed check, 2 on warnings only | Scripts can tell the two apart |
-| Checks that need the broker run through the socket | The broker owns its policy and its Secrets Manager access |
+| Git selected the wrong signing program | Set `gpg.ssh.program` at the winning configuration scope to the installed `/usr/local/lib/bas/shims/ssh-keygen`. |
+| The configured public key is absent or not held by the selected agent | Select the intended broker signing key's public key file, such as the verified `~/.ssh/git_signing.pub`, or its `key::` public key. Never substitute the comment `bas:git_signing`. |
+| Signing succeeds but trust verification fails | Correct `gpg.ssh.allowedSignersFile` and its trusted principal, namespace, validity, or revocation rule as the evidence requires. Do not remove revocation or trust checks to make the probe pass. |
+| Client cannot decode the broker's policy | Update the client to a release supporting broker entry summaries, then rerun policy display. Inspect the actual reply if an updated client still fails. |
+| Installed binary is newer than the broker process | Restart the broker through its configured service manager, then query `/v1/status` again. Updating a binary does not replace a running process. |
+| Required diagnostic endpoint returns 404 | Update the broker to a release containing the endpoint and restart it. Keep the reference result unavailable until then. |
+| A completed metadata listing omits a policy reference | Check the broker machine account's project access. Restore intended access, or propose the correct reference with `bas policy edit` for approval. Do not delete or rotate a secret automatically. |
+| Listing or socket access fails | Restore the reported connection, authentication, or UID access first. Rerun the check before changing a reference. |
 
-To do first: add the git signing check, the client and broker version check, and the missing reference check, because those three caused errors this week. The broker needs a small endpoint that reports which policy references it can't find.
+### Repeatable verification
+
+These are real command probes, not a request for new unit tests, integration tests,
+mocks, or an E2E suite. Record stdout, stderr, and exit status with nonsecret inputs.
+Use process-local overrides and disposable files, then remove them. Do not change
+live policy, live credentials, Git settings, or running services to manufacture a
+failure. The future broken broker cases require an isolated authorized setup and
+remain unverified until that setup exists.
+
+The following Git probe was run from this repository in zsh. It keeps Git's effective
+configuration and stores the disposable commit outside the repository's object
+directory. The trap removes the probe on exit. No branch or index changes.
+
+```sh
+set -eu
+probe_objects=$(mktemp -d)
+trap 'rm -rf "$probe_objects"' EXIT
+probe_source_objects=$(git rev-parse --path-format=absolute --git-path objects)
+probe_commit=$(GIT_OBJECT_DIRECTORY="$probe_objects" \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES="$probe_source_objects" \
+  timeout 10 git commit-tree 'HEAD^{tree}' -S -m 'bas doctor signing probe')
+GIT_OBJECT_DIRECTORY="$probe_objects" \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES="$probe_source_objects" \
+  git verify-commit "$probe_commit"
+```
+
+Repeat verification before cleanup with
+`git -c gpg.ssh.allowedSignersFile=/dev/null verify-commit "$probe_commit"`, keeping
+the same object-directory variables. It must fail. Repeat signing with
+`git -c user.signingkey=bas:git_signing commit-tree 'HEAD^{tree}' -S -m 'probe'`
+and the same variables. It must fail. Handle those expected nonzero statuses instead
+of letting `set -e` end a combined probe early. The working run must still pass after
+the process-local overrides are removed.
+
+| Case | Independent command or setup | Required result |
+|---|---|---|
+| Current broker | `curl --max-time 5 --unix-socket /run/bas/broker.sock http://localhost/v1/status`, then `bas policy show` | Report the actual version and readable policy. Once implemented, doctor agrees. |
+| Unreachable broker | `BAS_BROKER_SOCKET=/dev/null bas policy show` | Connection failure. Future `bas doctor --broker` must not report compatibility or reference readiness. |
+| Unequal versions | Run actual supported client releases against an isolated broker with readable policy | Policy decoding succeeds despite version drift. No invented incompatibility error. |
+| Incompatible policy display | Run the historical old client against an isolated newer broker with the field that broke parsing | Capture the actual parsing failure. Updating the client restores display. A recorded incident alone is not a rerun. |
+| Visible reference | Compare the isolated broker's diagnostic with its successful identifier listing | Every listed policy reference is ready without fetching values. |
+| Absent reference | Put a newly generated, unlisted UUID in the isolated broker's policy | Report not visible, never proven deleted. A valid replacement restores readiness. |
+| Metadata request fails | Use the isolated setup's rejected credential or unreachable API | Report unavailable evidence, never all references missing or all references ready. |
+| Policy changes during lookup | Approve a policy change only in the isolated setup while a lookup runs | Associate results with their snapshot and refuse to report them as current readiness. |
+| Prompt exclusion | Inspect unsupported key selection before starting a subprocess | A warning appears without launching hardware interaction. Physical YubiKey checks remain the final manual step. |
+
+The positive and negative Git probes and current socket probes were run on homelab.
+Historical mixed-version reproduction, metadata endpoint behavior, listing
+completeness, and physical YubiKey behavior remain unverified. No secret value was
+retrieved for this investigation. Signing requests add normal broker audit entries.
+
+Implementation references are [doctor.rs](../crates/bas/src/doctor.rs),
+[protocol.rs](../crates/bas-broker/src/protocol.rs),
+[ssh_agent.rs](../crates/bas-broker/src/ssh_agent.rs), and
+[Session::list_identifiers](../crates/bas-core/src/secrets.rs).
+The [Git configuration manual](https://git-scm.com/docs/git-config) defines effective
+signing configuration and local trust. The
+[OpenSSH manual](https://man.openbsd.org/ssh-keygen.1) defines detached signature
+verification. Neither an agent comment nor a version string substitutes for those
+operation results.
+
+The broader wishlist remains deferred. It includes macOS code signing and keychain
+prompts, passkey inventory, proxy checks, SSH login configuration, GitHub login, and
+Tailscale connectivity. None belongs in this first increment.
