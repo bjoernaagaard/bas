@@ -41,7 +41,7 @@ NODE_EXTRA_CA_CERTS  /run/bas/ca-bundle.pem
 GIT_SSL_CAINFO       /run/bas/ca-bundle.pem
 ```
 
-Go programs on macOS, `gh` among them, ignore `SSL_CERT_FILE`, so they can't use the proxy through `bas run --with`.
+Some Go programs on macOS ignore `SSL_CERT_FILE`, so they can't use the proxy through `bas run --with`. `gh` honors it.
 
 ## Variables the shims set
 

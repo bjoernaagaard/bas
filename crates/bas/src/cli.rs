@@ -47,8 +47,8 @@ pub enum Command {
     /// NODE_EXTRA_CA_CERTS, and GIT_SSL_CAINFO so the program's HTTPS requests go through
     /// the broker's proxy, which adds the credential for the entry's host. The broker
     /// records an audit entry. BAS_BROKER_SOCKET overrides the socket path
-    /// (/run/bas/broker.sock on Linux, /var/run/bas/broker.sock on macOS). Go programs on
-    /// macOS, gh among them, ignore SSL_CERT_FILE and so cannot use the proxy.
+    /// (/run/bas/broker.sock on Linux, /var/run/bas/broker.sock on macOS). Some Go
+    /// programs on macOS ignore SSL_CERT_FILE and so cannot use the proxy. gh honors it.
     Run(RunArgs),
     /// Print the raw value of one allowlisted reference, for credential helpers.
     ///
