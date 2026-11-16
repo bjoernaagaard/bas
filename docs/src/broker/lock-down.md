@@ -1,6 +1,8 @@
 # Lock down the host
 
-The broker keeps values away from your user only while your user can't become root. Root can read the sealed token's key, the broker's memory, and its state directory, so any path from your user to root is a path to every credential. Agents run as your user, so close each path before you rely on the broker.
+Close every path from your user to root, and delete every old copy of each credential, before you rely on the broker. The broker keeps values away from your user only while your user can't become root, and your agents run as your user.
+
+Root can read the sealed token's key, the broker's memory, and its state directory, so any path from your user to root is a path to every credential.
 
 ```mermaid
 flowchart LR
@@ -13,7 +15,14 @@ flowchart LR
     R --> M[Broker memory and state]
 ```
 
-Each step below closes one of the arrows in the diagram.
+Each section below closes one arrow in the diagram.
+
+| Arrow | Section that closes it |
+|---|---|
+| passwordless sudo | [Make sudo ask for a password](#make-sudo-ask-for-a-password) |
+| docker group, lxd group | [Leave the docker and lxd groups](#leave-the-docker-and-lxd-groups) |
+| Tailscale operator | [Stop your user from repointing the approval pages](#stop-your-user-from-repointing-the-approval-pages) |
+| old token in your home directory | [Delete the old machine token from your home directory](#delete-the-old-machine-token-from-your-home-directory) |
 
 ## Make sudo ask for a password
 
@@ -30,11 +39,11 @@ $ sudo -n true
 sudo: interactive authentication is required
 ```
 
-A sudo password still has a weak point. An agent that runs as your user can change your shell startup files, so it could wrap `sudo` and capture the password the next time you type it. Don't type the sudo password in a terminal that an agent could have set up, and prefer root over Tailscale SSH for admin work.
+Don't type the sudo password in a terminal that an agent could have set up, and prefer root over Tailscale SSH for admin work. An agent that runs as your user can change your shell startup files, so it could wrap `sudo` and capture the password the next time you type it.
 
 ## Leave the docker and lxd groups
 
-Membership in the `docker` or `lxd` group gives root, because a member can start a container that mounts the host's file system. Remove your user from both, then log out and back in.
+Remove your user from the `docker` and `lxd` groups, then log out and back in. A member of either group can start a container that mounts the host's file system, which gives root.
 
 ```sh
 sudo gpasswd -d "$USER" docker
@@ -46,11 +55,11 @@ To use containers as your user afterwards, use rootless Docker or Podman.
 
 ## Keep an administrator access method
 
-Keep a trusted console or administrator SSH account that agents cannot use. Tailscale is optional. If you do not use Tailscale, skip the commands in the next section and keep your HTTPS reverse proxy configuration writable only by administrators.
+Keep a trusted console or administrator SSH account that agents can't use. Tailscale is optional. If you don't use Tailscale, skip the commands in the next section, and keep your HTTPS reverse proxy configuration writable only by administrators.
 
 ### Use Tailscale SSH in check mode
 
-Tailscale SSH in check mode asks you to sign in to Tailscale again in a browser before it opens a root session, and an agent on the host can't do that sign-in. Turn on Tailscale SSH on the host, and add an SSH rule for `root` with `"action": "check"` to the tailnet policy file in the admin console.
+Turn on Tailscale SSH on the host, and add an SSH rule for `root` with `"action": "check"` to the tailnet policy file in the admin console. Check mode asks you to sign in to Tailscale again in a browser before it opens a root session, and an agent on the host can't do that sign-in.
 
 ```sh
 sudo tailscale set --ssh
@@ -68,22 +77,26 @@ sudo tailscale set --ssh
 ]
 ```
 
-Set `dst` to the tag or host of the broker machine. Test `ssh root@HOST` from another device twice before you remove any other way to root.
+Set `dst` to the tag or host of the broker machine. Test `ssh root@HOST` twice from another device before you remove any other way to root.
 
 ## Stop your user from repointing the approval pages
 
-A Tailscale operator is a user who may change `tailscale serve` without sudo. If your user is the operator, an agent could point `svc:bas` at a page of its own and show you a false request to approve. Clear the operator setting.
+Clear the Tailscale operator setting, so every `tailscale serve` change needs root. A Tailscale operator is a user who may change `tailscale serve` without sudo, and if your user is the operator, an agent could point `svc:bas` at a page of its own and show you a false request to approve.
 
 ```sh
 tailscale debug prefs | grep OperatorUser
 sudo tailscale set --operator=
 ```
 
-Afterwards, every `tailscale serve` change needs root.
+## Delete the old machine token from your home directory
 
-## Delete the old user-scope token
+Remove every copy of the machine token from your home directory, and revoke the old token in the web vault. Your user can decrypt a credential sealed for your user, so an agent can too.
 
-Before the broker, the machine token may have lived in your home directory, for example in a file sealed with `systemd-creds --user`, in `BWS_ACCESS_TOKEN` set by a shell function or a mise environment file, or in a direct `bas` profile. Your user can decrypt a user-scope credential, so an agent can too. Remove every copy, and revoke the old token in the web vault.
+| Where an old copy may live | How to remove it |
+|---|---|
+| A direct `bas` profile | `bas auth logout home` removes the profile and its stored token |
+| A file sealed with `systemd-creds --user` | `rm -f ~/.local/share/bas/bws.cred` |
+| `BWS_ACCESS_TOKEN` set by a shell function or a mise environment file | Delete the lines that the `rg` command below finds |
 
 ```sh
 bas auth list
@@ -92,32 +105,32 @@ rm -f ~/.local/share/bas/bws.cred      # a token sealed with systemd-creds --use
 rg -n 'BWS_ACCESS_TOKEN|bws.cred' ~/.zshenv ~/.zshrc ~/.bashrc ~/.profile ~/.config/mise
 ```
 
-In the web vault, open the machine account under Secrets Manager, then Machine accounts, and revoke the old access token on its Access tokens tab. The broker's token is a separate access token that only the sealed credential holds.
+To revoke the old token, open the web vault and go to Secrets Manager, then Machine accounts, then the machine account. Revoke the old access token on its Access tokens tab. The broker's token is a separate access token that only the sealed credential holds.
 
 ## Revoke the other old credentials
 
-Moving a credential into the broker protects it only if the old copy stops working. Revoke each old credential at its issuer and delete the local file.
+Revoke each old credential at its issuer and delete the local file, because a credential you moved into the broker stays usable until the old copy stops working.
 
 | Old credential | Revoke at | Delete |
 |---|---|---|
 | `gh` OAuth token | GitHub, Settings, Applications, Authorized OAuth Apps, GitHub CLI | `~/.config/gh/hosts.yml` |
-| SSH private keys | GitHub, Settings, SSH and GPG keys, and every `authorized_keys` that lists them | `~/.ssh/id_*`, keep the `.pub` files |
+| SSH private keys | GitHub, Settings, SSH and GPG keys, and every `authorized_keys` that lists them | `~/.ssh/id_*`, and keep the `.pub` files |
 | API keys in dotfiles or the environment | Each provider's console | The lines that set them |
 | Tailscale OAuth clients and API keys | Tailscale admin console, Trust credentials or Keys | The lines that set them |
 
 ## Check the result
 
-Run the checks below as your own user. Each must fail.
+Run each check below as your own user, and expect each one to fail.
 
 ```text
-check as your user                                         expected
-sudo -n true                                               interactive authentication is required
-docker ps                                                  permission denied
-cat /etc/credstore.encrypted/bas-bws.cred                  permission denied
+check as your user                                               expected
+sudo -n true                                                     interactive authentication is required
+docker ps                                                        permission denied
+cat /etc/credstore.encrypted/bas-bws.cred                        permission denied
 systemd-creds decrypt /etc/credstore.encrypted/bas-bws.cred -    fails
-cat /proc/$(pgrep -u bas -f 'bas broker')/environ          permission denied
-ls /var/lib/bas                                            permission denied
-printenv | grep -E 'BWS_ACCESS_TOKEN|GH_TOKEN|_API_KEY'    no output
+cat /proc/$(pgrep -u bas -f 'bas broker')/environ                permission denied
+ls /var/lib/bas                                                  permission denied
+printenv | grep -E 'BWS_ACCESS_TOKEN|GH_TOKEN|_API_KEY'          no output
 ```
 
 The credentials that your agent program itself needs to run, such as its login to a model provider, are outside bas, and the agent can read them. [What an agent can and can't do](agent-limits.md) lists every case.
