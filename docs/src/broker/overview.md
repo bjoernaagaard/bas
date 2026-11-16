@@ -1,8 +1,14 @@
 # How the broker works
 
-The `bas` broker runs as a service under a separate system user: a systemd service as `bas` on Linux, or a LaunchDaemon as `_bas` on macOS. It holds the credentials in its policy and uses them for your programs, including coding agents, without handing the values to them. Keeping values from agents also needs the host changes in [Lock down the host](lock-down.md), such as removing old profiles and passwordless `sudo`.
+Run the `bas` broker when you want your programs and coding agents to use credentials without ever holding their values, and follow [Install the broker](install.md) to set it up. The broker runs as a service under its own system user, holds the credentials in its policy, and uses them on behalf of your programs.
 
-The broker runs on Linux with systemd and on macOS. [macOS and Windows](../platforms.md) lists what differs on macOS. On Windows, use direct access.
+| Platform | How the broker runs |
+|---|---|
+| Linux with systemd | The systemd service `bas-broker.service`, as the user `bas` |
+| macOS | A LaunchDaemon, as the role account `_bas`. [macOS and Windows](../platforms.md) lists what differs. |
+| Windows | No broker. Use direct access. |
+
+The broker alone doesn't keep values from agents. You also need the host changes in [Lock down the host](lock-down.md), such as removing old profiles and passwordless `sudo`.
 
 ## What the broker serves
 
@@ -16,7 +22,9 @@ bas broker (user bas, bas-broker.service)
 └── 127.0.0.1:793              approval pages, published through an HTTPS reverse proxy
 ```
 
-The socket API and the ssh-agent ask the kernel for the user ID of each caller, and they refuse every user ID that `allow-uids` in `/etc/bas/broker.toml` doesn't list. The proxy and the approval pages listen on loopback addresses only.
+On macOS the sockets live in `/var/run/bas/`, and the approval pages listen on the socket `/var/run/bas/approve.sock` instead of a port.
+
+The socket API and the ssh-agent ask the kernel for the user ID of each caller. They refuse every user ID that `allow-uids` in `/etc/bas/broker.toml` doesn't list. The proxy and the approval pages listen on loopback addresses only.
 
 ```mermaid
 flowchart LR
@@ -47,7 +55,7 @@ flowchart LR
 
 ## How a program uses a credential
 
-A program uses a credential through the proxy, the ssh-agent, or a minted token. The broker refuses any policy entry that would put a value in a program's environment.
+A program uses a credential through the proxy, the ssh-agent, or a minted token, and the broker refuses any policy entry that would put a value in a program's environment.
 
 | Credential | How the program uses it |
 |---|---|
@@ -56,7 +64,22 @@ A program uses a credential through the proxy, the ssh-agent, or a minted token.
 | Tailscale OAuth client | The proxy mints an access token and adds it to allowed requests for `api.tailscale.com`. |
 | SSH key in an `[ssh.NAME]` entry | `ssh` and `git` ask the ssh-agent for a signature. The agent never exports the key. |
 
-The proxy accepts only `CONNECT` to port 443. For a host with no policy entry, it opens a plain tunnel and never reads the traffic. For a policy host, the proxy ends the program's TLS connection with a certificate from its own certificate authority, checks the request, removes any `Authorization` header the program sent, adds its own, and opens a new TLS connection to the real host. The program trusts the proxy's certificate authority through `SSL_CERT_FILE` and similar variables, which point at `/run/bas/ca-bundle.pem`. The authority isn't added to the system trust store.
+The proxy reads only the traffic for hosts in the policy, and it passes all other traffic through unread.
+
+```text
+on(request to the proxy)
+  if not CONNECT to port 443
+    refuse
+  if host has no policy entry
+    open a plain tunnel, never read the traffic
+  else
+    end the program's TLS with a certificate from the proxy's own certificate authority
+    check the request
+    remove any Authorization header the program sent, add its own
+    open a new TLS connection to the real host
+```
+
+The program trusts the proxy's certificate authority through `SSL_CERT_FILE` and similar variables, which point at `/run/bas/ca-bundle.pem`. The broker doesn't add the authority to the system trust store.
 
 ```mermaid
 sequenceDiagram
@@ -76,9 +99,9 @@ sequenceDiagram
 
 ## How you approve changes
 
-A change to what the broker allows needs your approval with a passkey. A passkey is a WebAuthn key pair kept on a device, such as a YubiKey or a password manager, and each approval needs user verification on the device, such as a touch, a PIN, or Face ID. An agent on the broker machine can't give the verification.
+You approve each change to what the broker allows with a passkey. A passkey is a WebAuthn key pair kept on a device, such as a YubiKey or a password manager. Each approval needs user verification on the device, such as a touch, a PIN, or Face ID, and an agent on the broker machine can't give it.
 
-The broker serves the approval pages on `127.0.0.1:793`. An HTTPS reverse proxy publishes them at the configured approval address, and Tailscale Serve is an optional way to do that. Port 793 is below 1024, so no process of your user can take it, even while the broker is down. Each page shows what was asked, the user ID and process ID the kernel reported, and for a policy change the diff.
+The broker serves the approval pages on `127.0.0.1:793`, and an HTTPS reverse proxy publishes them at the configured approval address. Tailscale Serve is an optional way to publish them. Port 793 is below 1024, so no process of your user can take it, even while the broker is down. Each page shows what was asked and the user ID and process ID the kernel reported, and for a policy change it also shows the diff.
 
 ```mermaid
 sequenceDiagram
@@ -97,18 +120,26 @@ sequenceDiagram
     bas-->>You: the active policy is now HASH
 ```
 
-The following requests need an approval:
+The table lists each request that needs an approval.
 
-- `bas policy edit`, for any change to the policy
-- `bas add`, which also asks you to type the new value on the approval page
-- `bas rotate NAME` for a `[secret.NAME]` entry, which asks for the new value the same way
-- `bas passkey add`, to enroll one more passkey, or `bas passkey add --replace`, to replace all of them
+| Command | What you approve |
+|---|---|
+| `bas policy edit` | Any change to the policy |
+| `bas add` | A new secret, whose value you type on the approval page |
+| `bas rotate NAME` for a `[secret.NAME]` entry | A new value, which you type on the approval page the same way |
+| `bas passkey add` | One more passkey |
+| `bas passkey add --replace` | New passkeys that replace all of the enrolled ones |
 
 A request waits up to 15 minutes. The broker keeps pending requests in memory, so a restart drops them. Denying a request needs no passkey, because a denial grants nothing.
 
 ## What the broker records
 
-The broker writes one entry for each credential it uses, each change, and each refusal. Each entry has the field `BAS_AUDIT=1`. On Linux the entries go to the system journal, and journald adds the unit name itself, so a process of your user can't forge or delete an entry for the broker. On macOS they go to `/var/log/bas/audit.jsonl`, which only the broker can read and only root can shorten. `bas audit` prints the entries.
+The broker writes one audit entry for each credential it uses, each change, and each refusal, and `bas audit` prints the entries. Each entry has the field `BAS_AUDIT=1`.
+
+| Platform | Where the entries go | Who can change them |
+|---|---|---|
+| Linux | The system journal, where journald adds the unit name itself | No process of your user can forge or delete an entry for the broker |
+| macOS | `/var/log/bas/audit.jsonl` | Only the broker can read the file, and only root can shorten it |
 
 ```text
 $ bas audit --since 10m
@@ -119,4 +150,4 @@ $ bas audit --since 10m
 
 ## Next steps
 
-Follow [Install the broker](install.md), then add a [GitHub App](github-app.md) and a [Tailscale OAuth client](tailscale.md) if you need them. [Lock down the host](lock-down.md) explains what else must be true for an agent to have no way to the values.
+Follow [Install the broker](install.md) first. Then add a [GitHub App](github-app.md) and a [Tailscale OAuth client](tailscale.md) if you need them. [Lock down the host](lock-down.md) explains what else must be true so an agent has no way to reach the values.

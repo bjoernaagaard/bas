@@ -1,6 +1,6 @@
 # Set up a GitHub App
 
-A GitHub App lets the broker mint a token for one repository at a time, valid for one hour, instead of keeping a personal token that reaches every repository you can. The broker holds the App's private key, and the proxy adds the minted token to requests for `api.github.com`, `uploads.github.com`, and `github.com`. `gh` and git over HTTPS then work without any token on your side.
+Create a GitHub App, store its private key in Secrets Manager, and add it to the policy, so `gh` and git over HTTPS work with no token on your side. The broker then mints a token for one repository at a time, valid for one hour, instead of keeping a personal token that reaches every repository you can. The broker holds the App's private key, and the proxy adds the minted token to requests for `api.github.com`, `uploads.github.com`, and `github.com`.
 
 ```mermaid
 sequenceDiagram
@@ -20,11 +20,22 @@ sequenceDiagram
 
 ## Create the App
 
-Open the prefilled creation page below in a browser where you are signed in to GitHub. Replace `ORG` with your organization and `NAME` with a name for the App, such as `bas-homelab`. The parameters turn off webhooks and ask for the permissions the broker's example policy uses.
+Open the prefilled creation page below in a browser where you are signed in to GitHub. Replace `ORG` with your organization and `NAME` with a name for the App, such as `bas-homelab`.
 
 ```text
 https://github.com/organizations/ORG/settings/apps/new?name=NAME&url=https://github.com/ORG&webhook_active=false&contents=write&pull_requests=write&issues=write&actions=read&metadata=read
 ```
+
+The parameters turn off webhooks and ask for the permissions that the broker's example policy uses.
+
+| Parameter | Value |
+|---|---|
+| `webhook_active` | `false` |
+| `contents` | `write` |
+| `pull_requests` | `write` |
+| `issues` | `write` |
+| `actions` | `read` |
+| `metadata` | `read` |
 
 For an App owned by your personal account, use `https://github.com/settings/apps/new?` with the same parameters. Check the permissions on the page, choose that the App can be installed only on your account, and create it. Note the App ID at the top of the App's settings page.
 
@@ -32,7 +43,11 @@ Leave out the `workflows` permission. Without it, a token can't change files und
 
 ## Store the private key
 
-On the App's settings page, generate a private key. GitHub downloads a `.pem` file. Create a new secret in the broker's project in the Secrets Manager web vault, paste the whole contents of the file as the value, and note the secret's ID. Then delete the file.
+Generate a private key on the App's settings page, store the whole `.pem` file as a secret, and delete the file.
+
+1. Generate the private key. GitHub downloads a `.pem` file.
+2. Create a new secret in the broker's project in the Secrets Manager web vault, paste the whole contents of the file as the value, and note the secret's ID.
+3. Delete the file.
 
 ```sh
 shred -u ~/Downloads/NAME.*.private-key.pem
@@ -40,7 +55,7 @@ shred -u ~/Downloads/NAME.*.private-key.pem
 
 ## Install the App on repositories
 
-On the App's page, choose Install App, pick the account, and select the repositories the broker may mint tokens for. After the install, the browser shows a URL that ends in the installation ID.
+Install the App on each repository the broker may mint tokens for, and note the installation ID. On the App's page, choose Install App, pick the account, and select the repositories. After the install, the browser shows a URL that ends in the installation ID.
 
 ```text
 https://github.com/organizations/ORG/settings/installations/7654321
@@ -78,7 +93,7 @@ OWNER/REPO
 
 ## How the proxy picks the repository
 
-Each token covers one repository, so the proxy must know which repository a request is for. It reads the repository from the request path when the path names one, and otherwise from the proxy user that the `gh` shim sets. When both name a repository, they must match.
+The proxy reads the repository from the request path when the path names one, and otherwise from the proxy user that the `gh` shim sets, because each token covers one repository. When both name a repository, they must match.
 
 ```text
 on(request to a GitHub host)
@@ -98,11 +113,11 @@ on(request to a GitHub host)
   add a token for the one repository only
 ```
 
-When a request path names no repository, the proxy uses the repository that the `gh` shim names for the current directory. Without either one, the request needs your own account, as `gh auth status`, `gh api user`, and GraphQL `viewer` queries do, and GitHub refuses installation tokens there. Set `user_token` in `[github]` to a GitHub user token, such as a fine-grained personal access token, and the proxy adds it to these requests. The audit log records these as `github:user`. Without `user_token`, the proxy refuses them.
+Some requests name no repository in the path or the proxy user, and they need your own account. `gh auth status`, `gh api user`, and GraphQL `viewer` queries are examples, and GitHub refuses installation tokens for them. Set `user_token` in `[github]` to a GitHub user token, such as a fine-grained personal access token, and the proxy adds it to those requests. The audit log records them as `github:user`. Without `user_token`, the proxy refuses them.
 
 ## git over HTTPS
 
-git over SSH uses the broker's ssh-agent and an `[ssh.NAME]` key, as [Install the broker](install.md) sets up. To use the App for git over HTTPS instead, run git through the proxy.
+Run git through the proxy with `bas run --with github` to use the App for git over HTTPS. git over SSH uses the broker's ssh-agent and an `[ssh.NAME]` key instead, as [Install the broker](install.md) sets up.
 
 ```sh
 bas run --with github -- git push https://github.com/OWNER/REPO HEAD:my-branch
@@ -110,7 +125,7 @@ bas run --with github -- git push https://github.com/OWNER/REPO HEAD:my-branch
 
 ```text
 $ bas run --with github -- git ls-remote https://github.com/OWNER/REPO HEAD
-<commit>	HEAD
+<commit>    HEAD
 $ bas audit --since 1m
 ...  inject   added github:OWNER/REPO to GET https://github.com/OWNER/REPO/info/refs
 ...  inject   added github:OWNER/REPO to POST https://github.com/OWNER/REPO/git-upload-pack
@@ -119,6 +134,8 @@ $ bas audit --since 1m
 Pushes and pull requests made with an App token show the App's bot as the actor. Commits keep the author name and email from your git settings.
 
 ## When something fails
+
+Find the message in the table and fix its cause. After you change the App's permissions or the installation, run `bas rotate github` so the broker drops its cached tokens and mints new ones on the next request.
 
 | Message | Cause |
 |---|---|
@@ -129,5 +146,3 @@ Pushes and pull requests made with an App token show the App's bot as the actor.
 | `refused by bas policy: no repository: put it in the path or in the proxy user, as gh:OWNER%2FREPO` | Run `gh` inside a checkout whose `origin` is on GitHub, name the repository in the path, or add `user_token` to `[github]` for requests about your own account |
 | `bas broker: could not read the [github] user_token` | The `user_token` reference is wrong, or the broker's machine account can't read it |
 | `the active policy has no [github] table, so the bas broker cannot mint GitHub tokens` | Add the `[github]` table |
-
-After you change the App's permissions or the installation, run `bas rotate github` so the broker drops its cached tokens and mints new ones on the next request.

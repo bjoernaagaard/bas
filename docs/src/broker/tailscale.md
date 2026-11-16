@@ -1,6 +1,6 @@
 # Set up a Tailscale OAuth client
 
-A Tailscale OAuth client lets the broker mint short-lived access tokens for the Tailscale API. The broker keeps the client ID and the client secret, and the proxy adds a token to requests for `api.tailscale.com` whose method and path match `api_allow`. A program never sees the client secret or the token.
+Create a Tailscale OAuth client, store its ID and secret in Secrets Manager, and add it to the policy, so programs can call the Tailscale API through the proxy without seeing the client secret or a token. The broker keeps the client ID and the client secret and mints access tokens from them. The proxy adds a token to each request for `api.tailscale.com` whose method and path match `api_allow`.
 
 ```mermaid
 sequenceDiagram
@@ -19,9 +19,12 @@ sequenceDiagram
 
 ## Create the client
 
-In the Tailscale admin console, open Trust credentials and create an OAuth credential. Choose only the scopes you need. For example, the Read permission under Devices, then Core, gives the scope `devices:core:read`. After you generate the credential, the console shows the client ID and the client secret once.
+Create an OAuth credential with only the scopes you need, and store its client ID and client secret as two secrets.
 
-Store both in the broker's project in the Secrets Manager web vault, as two secrets, and note their IDs. Close the console page without saving the values anywhere else.
+1. In the Tailscale admin console, open Trust credentials and create an OAuth credential.
+2. Choose only the scopes you need. For example, the Read permission under Devices, then Core, gives the scope `devices:core:read`.
+3. Generate the credential. The console shows the client ID and the client secret once.
+4. Store both in the broker's project in the Secrets Manager web vault, as two secrets, and note their IDs. Close the console page without saving the values anywhere else.
 
 ## Add the client to the policy
 
@@ -49,9 +52,19 @@ refused by bas policy: method and path not in api_allow
 
 The second request isn't in `api_allow`, so the proxy refuses it and writes a `deny` entry to the journal.
 
+```text
+on(request to api.tailscale.com)
+  if "METHOD /path" matches an entry in api_allow
+    add an access token for the scopes, cached or newly minted
+    send the request
+  else
+    refuse with 403 "method and path not in api_allow"
+    write a deny entry
+```
+
 ## Wider access
 
-Each new API path needs a scope on the client and an entry in `api_allow`. For example, managing the tailnet policy file and Tailscale Services needs more scopes and paths.
+Add a scope on the client and an entry in `api_allow` for each new API path. For example, managing the tailnet policy file and Tailscale Services needs more scopes and paths.
 
 ```diff
  [tailscale]
