@@ -24,7 +24,7 @@ Have each item in the table ready before step 1.
 | You need | Details |
 |---|---|
 | A Linux machine | It needs systemd with `systemd-creds`, which Ubuntu 22.04 and Debian 12 and later have. |
-| `bas` v0.9.0 or later | Install it as [Install bas](../getting-started/install.md) describes. |
+| `bas` v0.9.1 or later | Install it as [Install bas](../getting-started/install.md) describes. |
 | A Secrets Manager machine account for the broker, and an access token for it | Give the account read access to the project that holds the secrets the policy names. Give it write access to the project where `bas add` should create new secrets. |
 | Your organization ID, and the project ID for `bas add` | The Secrets Manager web app shows both. |
 | An HTTPS address for the approval pages | Such as `https://bas.example.com`. For Tailscale Serve, use `https://bas.TAILNET.ts.net`, where `TAILNET` is the name of your tailnet. Choose it now, because passkeys are bound to its hostname. |
