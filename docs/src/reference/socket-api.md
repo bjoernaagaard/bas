@@ -48,7 +48,7 @@ The status reply gives the broker's version, the hash of its active policy, and 
 
 ```json
 {
-  "version": "0.8.7",
+  "version": "0.8.8",
   "policy_hash": "234a60d414c9...",
   "requests": [
     {
