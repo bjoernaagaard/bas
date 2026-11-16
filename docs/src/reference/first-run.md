@@ -1,17 +1,21 @@
 # First-run messages
 
-The tables list every message `bas` can print between a first `bas auth login` or `bas tui` and the first secret. Each row gives the message as `bas` prints it, what the person most likely meant, and the command to type next. `NAME` stands for the profile name in the message. [Sign in with an access token](../getting-started/first-run.md) describes the first run itself.
+Find the message `bas` printed in the tables below, and type the command in the last column. The tables cover every message between a first `bas auth login` or `bas tui` and the first secret. Each row gives the message as `bas` prints it, what the person most likely meant, and the command to type next. `NAME` stands for the profile name in the message. [Sign in with an access token](../getting-started/first-run.md) describes the first run itself.
 
-```mermaid
-flowchart LR
-    A[bas auth login or bas tui] --> B[bas auth status, bas find, or the TUI project list]
-    A -.parser errors, exit 2.-> P[Usage errors]
-    A -.before the server.-> L[Local errors]
-    A -.from the server.-> S[Sign-in errors]
-    B -.-> F[Errors after sign-in]
+Each section below covers one stage of the first run, in the order of the tree.
+
+```text
+bas auth login or bas tui
+├── the parser rejects the arguments        usage errors, exit 2
+├── bas checks input before the server      errors before the server
+├── the server answers the sign-in          errors from the sign-in
+└── bas auth status, bas find, or the TUI project list
+    └── the first listing                   errors after sign-in
 ```
 
 ## Usage errors from the command-line parser (exit 2)
+
+The parser stops before `bas` reads any token, and the command exits with code 2.
 
 | Message | What the user most likely meant | Exact command to type next |
 |---|---|---|
@@ -25,6 +29,8 @@ flowchart LR
 | `error: the following required arguments were not provided: <PROFILE>` from `bas pair` | To sign in with a token | `bas auth login` |
 
 ## Errors from bas before it contacts the server
+
+`bas` checks the profile name, the endpoint, the token input, and the configuration directory before it sends anything.
 
 | Message | What the user most likely meant | Exact command to type next |
 |---|---|---|
@@ -59,6 +65,8 @@ flowchart LR
 
 ## Errors from the sign-in itself
 
+The server or the OS credential store refused the sign-in, or `bas` couldn't save the profile. The last row is the message of a successful sign-in.
+
 | Message | What the user most likely meant | Exact command to type next |
 |---|---|---|
 | `bas: Secrets Manager refused the machine token for profile 'NAME' at https://identity.bitwarden.com and https://identity.bitwarden.eu; check that you copied the whole token, or pass --server-url for a self-hosted server` | A revoked, expired, or partly copied token, or a self-hosted server. Copy a fresh token from the web vault | `bas auth login` |
@@ -75,6 +83,8 @@ flowchart LR
 | `authenticated profile 'NAME' for organization ID at URL; token source: os credential store`, then `` bas: next: run `bas tui --profile NAME` to browse your secrets, or `bas find --profile NAME` to list references `` | Success | `bas tui --profile NAME` |
 
 ## After sign-in, before the first secret
+
+The profile exists, and the first listing of secrets or projects failed.
 
 | Message | What the user most likely meant | Exact command to type next |
 |---|---|---|
