@@ -195,6 +195,136 @@ fresh PIN was typed for this request or that a person understood its contents.
 No YubiKey HID device was exposed on homelab during this investigation. Physical
 touch, PIN behavior, and hardware enrollment remain unverified.
 
+### Boundary checks and the physical trace blocker, 16 Nov 2026
+
+The full physical trace has not run. The installed `bas` rejects `approve`,
+and the running broker has no SSH-signature submission route. Adding that
+route would implement a feature, which this investigation does not authorize.
+An existing pending request belonged to other work and was left untouched.
+
+```text
+bas approve --help
+exit=2
+bas: invalid arguments; rejected values are not repeated because they may be secrets. Run `bas --help` or `bas <command> --help`
+
+GET /v1/approvals/00000000-0000-0000-0000-000000000000
+HTTP 404, {"error":"no such approval"}
+
+POST /v1/approvals/00000000-0000-0000-0000-000000000000/signature
+HTTP 404
+```
+
+The route table in `server.rs` confirms the missing endpoint. A 404 for an
+unknown ID alone would not prove that a route is absent. The broker's version
+was 0.8.7. Homelab exposed an ASUS sound card and an NZXT device through HID,
+but no YubiKey. The reachable mini's IOUSB registry had no match for `Yubi`,
+`FIDO`, or `Security Key`; its SSH agent listed one ordinary Ed25519 key.
+Those observations do not establish where an unplugged key is stored.
+
+For a non-mutating experiment, the running broker supplied its exact active
+policy bytes. A local candidate appended only the comment shown below. It
+was never proposed to the broker. Two disposable software Ed25519 keys signed
+a length-prefixed message using `/usr/bin/ssh-keygen -Y sign`. They were not
+enrolled in the broker and did not represent physical YubiKeys.
+
+```diff
+--- active
++++ local candidate
++
++# bas consent boundary experiment 2026-11-16
+```
+
+```text
+active policy SHA256
+116e799e72b49f2306b1b0452b316953074075055353f1faf711c752cebd9995
+local candidate SHA256
+2c20f79a2628af60b014267bd62ba98e4c2e89c8b0e5345c868d883871cf1f31
+```
+
+The message used these fields in order. Each field was UTF-8 preceded by its
+byte length as a four-byte unsigned big-endian integer. This is an experiment
+encoding, not an existing broker protocol. The ID and nonce below are made-up
+values, and the expiry was deliberately in the past.
+
+```text
+version       1
+broker        https://bas.taildfc6b2.ts.net
+request ID    11111111-1111-4111-8111-111111111111
+kind          policy
+base hash     116e799e72b49f2306b1b0452b316953074075055353f1faf711c752cebd9995
+proposed hash 2c20f79a2628af60b014267bd62ba98e4c2e89c8b0e5345c868d883871cf1f31
+nonce         2222222222222222222222222222222222222222222222222222222222222222
+expiry        2026-11-16T20:00:00Z
+```
+
+| Attempt | Actual command result | What the result establishes |
+|---|---|---|
+| Append `x` to each signed field separately | All eight verifications exited 255 | The signature binds the encoded fields, including the two policy hashes |
+| Verify the original message with its past expiry | Exit 0 | OpenSSH does not interpret an application expiry field |
+| Verify the same message and signature again | Exit 0 | Signature validity is independent of request consumption |
+| Parent process replaces the diff line with `+# no policy change to review` | Verification still exited 0 | The signature does not authenticate what a parent process displays; this was a local output-substitution experiment, not an attack on an implemented approval CLI |
+| Change the verifier's enrolled public key from A to B, keeping signature A | Exit 255 | A fixed trusted key prevents signer substitution |
+| Replace both the trusted public key and signer with B | Exit 0 | Signature verification cannot establish how a key became trusted |
+| Fetch the active policy again and run `cmp` against the first fetch | Exit 0 | The broker policy was unchanged during the experiment |
+| Submit through the planned signature endpoint | No route exists | Physical signing, broker rejection rules, and application cannot be validated through this path yet |
+
+The following command repeats the field-binding, expiry, replay, and key
+substitution checks using the recorded public message fields. It generates
+fresh disposable software keys, so fingerprints differ between runs. It
+does not contact a broker, use an SSH agent key, or change account access.
+All scratch files are removed when the command exits.
+
+```sh
+node <<'JS'
+const fs = require('node:fs'), os = require('node:os');
+const { join } = require('node:path'), { spawnSync } = require('node:child_process');
+const dir = fs.mkdtempSync(join(os.tmpdir(), 'bas-consent-evidence-'));
+const fields = ['1', 'https://bas.taildfc6b2.ts.net',
+  '11111111-1111-4111-8111-111111111111', 'policy',
+  '116e799e72b49f2306b1b0452b316953074075055353f1faf711c752cebd9995',
+  '2c20f79a2628af60b014267bd62ba98e4c2e89c8b0e5345c868d883871cf1f31',
+  '2222222222222222222222222222222222222222222222222222222222222222',
+  '2026-11-16T20:00:00Z'];
+const encode = values => Buffer.concat(values.map(value => {
+  const bytes = Buffer.from(value), length = Buffer.alloc(4);
+  length.writeUInt32BE(bytes.length);
+  return Buffer.concat([length, bytes]);
+}));
+const message = encode(fields), file = join(dir, 'message');
+const allowed = join(dir, 'allowed_signers');
+const run = (args, input) => spawnSync('/usr/bin/ssh-keygen', args, { input, encoding: 'utf8' });
+const mustRun = args => { const r = run(args); if (r.status !== 0) throw Error(r.stderr); };
+const verify = bytes => run(['-Y', 'verify', '-f', allowed, '-I', 'operator',
+  '-n', 'bas-approval', '-s', file + '.sig'], bytes).status;
+try {
+  for (const name of ['A', 'B']) mustRun(['-q', '-t', 'ed25519', '-N', '', '-f', join(dir, name)]);
+  fs.writeFileSync(file, message);
+  const enroll = name => fs.writeFileSync(allowed, 'operator ' + fs.readFileSync(join(dir, name + '.pub'), 'utf8'));
+  const sign = name => mustRun(['-Y', 'sign', '-f', join(dir, name), '-n', 'bas-approval', file]);
+  enroll('A'); sign('A');
+  console.log('past expiry', verify(message), 'replay', verify(message));
+  fields.forEach((value, index) => {
+    const changed = [...fields]; changed[index] = value + 'x';
+    console.log('changed field', index, verify(encode(changed)));
+  });
+  enroll('B');
+  console.log('key B with signature A', verify(message));
+  fs.rmSync(file + '.sig'); sign('B');
+  console.log('key B with signature B', verify(message));
+} finally { fs.rmSync(dir, { recursive: true, force: true }); }
+JS
+```
+
+The next physical run must keep three forms of evidence separate. A recorded
+display establishes what a trusted display showed. Signature verification
+establishes the signed message and authenticated flags. Broker audit records
+and a before-and-after policy diff establish what was applied. No one of
+those artifacts proves the other two, and none proves human comprehension.
+
+Until an approval path exists, the acceptance table below is a specification,
+not a passed validation. A real YubiKey signature is required to validate
+hardware behavior; the software signatures above cannot substitute for it.
+
 ### Smallest implementation justified by the evidence
 
 Proceed only after the terminal trust prerequisite and enrollment trust method
