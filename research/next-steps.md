@@ -771,8 +771,17 @@ When the broker's listing and the client's wait both end at 10 seconds, the clie
 give up first. The result is still a warning, with the connection fix instead of the
 timeout wording.
 
+On the mini (macOS 27.2.1) the same commit built, and `bas doctor --broker` reported
+`git signing` ready and `broker compatibility` ready against its live 0.8.7 broker. With
+`user.signingkey` set for one process to the `sk-ssh-ed25519` public key file, it warned
+in under a second and asked for no touch.
+
+The physical YubiKey signature did not run. Homebrew's `ssh-keygen -Y sign` from OpenSSH
+10.6p2 asked for presence and then answered "device not found" for both hardware keys,
+and the mini's IO registry listed no FIDO HID device at that time.
+
 Still unverified: an empty listing from a real machine account with no visible secrets,
-and the Windows build. Signing requests add normal broker
+a real YubiKey signature, and the Windows build. Signing requests add normal broker
 audit entries.
 
 Implementation references are [doctor.rs](../crates/bas/src/doctor.rs),
