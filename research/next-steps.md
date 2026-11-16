@@ -581,7 +581,7 @@ warns, otherwise 0. Keep `not configured` for optional setup that was not reques
 |---|---|---|---|
 | Git signing | A fresh disposable commit is signed through effective Git settings and accepted by `git verify-commit`. | A supported signing configuration produces an explicit signing failure or fails trust verification. Report the stage that failed. | No repository, unsupported signing format or key selection, uninspected signing wrapper, hardware interaction, or timeout prevents the probe. |
 | Client and broker compatibility | The current client decodes status and displays the active policy through `ActivePolicy::entries()`. Name the operations actually checked. | A returned required reply or policy cannot be decoded, or access is explicitly refused. Report decoding and authorization separately. | The socket is unreachable, a request times out, or a required diagnostic endpoint is unsupported. Different version strings are a warning about drift, not proof of incompatibility. |
-| Policy references | A complete successful identifier listing contains every distinct reference in the policy snapshot. | A completed listing omits a reference. Say "not visible to the broker's machine account", not "deleted". | Listing fails, times out, cannot establish completeness, or the policy changes before results can be associated with the current snapshot. |
+| Policy references | A complete successful identifier listing contains every distinct reference in the policy snapshot. | A completed, nonempty listing omits a reference. Say "not visible to the broker's machine account", not "deleted". | Listing fails, times out, is empty despite a nonempty policy, cannot establish completeness, or the policy changes before results can be associated with the current snapshot. |
 
 Signing readiness applies to the current repository and effective configuration.
 It does not prove another repository, another identity, remote GitHub trust, or the
@@ -607,12 +607,14 @@ Add `bas doctor --broker` to run these three checks explicitly. Preserve the cur
 offline default and the existing `--profile` behavior. Add `--json` for the same
 results as the text output, with no second diagnostic path. Do not add a daemon,
 new dependency, general plugin system, or automatic repair.
+Resolve the socket through `client::socket_path()` so `BAS_BROKER_SOCKET` has the
+same meaning as it does for `bas policy show`.
 
 | Existing owner | Small change |
 |---|---|
 | `crates/bas/src/cli.rs`, `doctor.rs`, `main.rs`, and `output.rs` | Add the opt-in checks, warning status, structured evidence and fix fields, JSON output, and exit aggregation. Existing offline checks remain usable. |
 | Git subprocesses inside the doctor | Read only the signing configuration keys with origin and scope. Let Git select the key and verify trust. Use a disposable object directory without changing refs, the index, hooks, or config. |
-| `crates/bas-broker/src/client.rs` and `protocol.rs` | Reuse status and policy requests. Add the typed reference diagnostic request and reply. Preserve additive reply compatibility. |
+| `crates/bas-broker/src/client.rs`, `error.rs`, and `protocol.rs` | Reuse status and policy requests. Add the typed reference diagnostic request and reply. Preserve the HTTP status in client errors so endpoint 404 and authorization 403 remain distinguishable without parsing message text. Preserve additive reply compatibility. |
 | `crates/bas-broker/src/server.rs` and `policy.rs` | Add authenticated `GET /v1/doctor/references`, using the existing peer UID check. Enumerate references from typed policy entries and retain each owner and field. |
 | `crates/bas-core/src/secrets.rs` | Reuse `Session::list_identifiers(None)`, which uses metadata endpoints without secret values. No new credential path is needed. |
 
@@ -640,9 +642,25 @@ The parser already requires every reference to use the broker's profile.
 Return the snapshot's existing policy identity, checked count, and per-reference
 visibility. Compare against the current policy identity before reporting readiness.
 If it changed, report a warning and ask for a rerun. Never return an empty missing
-list as success when the upstream request failed. Verify the locked SDK's listing
-completeness before implementing absence as a failure. Neither `Session::get` nor
+list as success when the upstream request failed. Neither `Session::get` nor
 `bas get` belongs in this diagnostic.
+
+The locked `bitwarden-sm` 3.0.0 implementation calls the organization identifier
+endpoint once. Its `secrets/list.rs` converts `response.secrets` with
+`unwrap_or_default()`, so a missing or null field becomes an empty successful list.
+The generated `SecretWithProjectsListResponseModel` has no continuation token, and
+the SDK result exposes no completeness marker. An empty result with policy references
+must therefore warn that visibility could not be established. Do not claim that all
+references are missing. A nonempty result supports comparison under the endpoint's
+complete-list contract, but cannot prove the remote server fulfilled that contract.
+Keep server behavior validation in the isolated verification work. No new package,
+direct credential access, or secret value fetch is needed for this conservative rule.
+
+The client currently keeps HTTP status only in some rendered refusal messages and
+classifies all such responses as `ErrorKind::Refused`. Retain the status as data at
+the response boundary before adding the diagnostic. An optional HTTP status field
+on `Error`, set by `refused()`, is sufficient. A 403 is an access failure,
+whereas a 404 on the new reference endpoint is an unsupported-check warning.
 
 ### Fixes must follow the observed failure
 
@@ -700,12 +718,14 @@ the process-local overrides are removed.
 | Visible reference | Compare the isolated broker's diagnostic with its successful identifier listing | Every listed policy reference is ready without fetching values. |
 | Absent reference | Put a newly generated, unlisted UUID in the isolated broker's policy | Report not visible, never proven deleted. A valid replacement restores readiness. |
 | Metadata request fails | Use the isolated setup's rejected credential or unreachable API | Report unavailable evidence, never all references missing or all references ready. |
+| Empty metadata result with policy references | Use an isolated machine account with no visible identifiers | Report unavailable evidence because the SDK cannot distinguish an empty list from a missing response field. Do not claim deletion. |
 | Policy changes during lookup | Approve a policy change only in the isolated setup while a lookup runs | Associate results with their snapshot and refuse to report them as current readiness. |
 | Prompt exclusion | Inspect unsupported key selection before starting a subprocess | A warning appears without launching hardware interaction. Physical YubiKey checks remain the final manual step. |
 
 The positive and negative Git probes and current socket probes were run on homelab.
-Historical mixed-version reproduction, metadata endpoint behavior, listing
-completeness, and physical YubiKey behavior remain unverified. No secret value was
+Historical mixed-version reproduction, metadata endpoint behavior, server listing
+completeness, and physical YubiKey behavior remain unverified. The SDK's empty-list
+ambiguity was confirmed in its locked source. No secret value was
 retrieved for this investigation. Signing requests add normal broker audit entries.
 
 Implementation references are [doctor.rs](../crates/bas/src/doctor.rs),
